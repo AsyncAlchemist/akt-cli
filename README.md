@@ -1,17 +1,22 @@
+<div align="center">
+
 # akt — Akaunting CLI toolbox
+### Drive your Akaunting accounting instance entirely from the command line
 
-[![PyPI](https://img.shields.io/pypi/v/akt-cli.svg)](https://pypi.org/project/akt-cli/)
-[![CI](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/AsyncAlchemist/akt-cli/graph/badge.svg)](https://codecov.io/gh/AsyncAlchemist/akt-cli)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+>`akt` gives you full create / read / update / delete for customers, vendors, items, invoices, bills, payments, accounts, categories, taxes, currencies and transfers — plus a `raw` escape hatch for any other endpoint. Built and tested against [Akaunting](https://akaunting.com) **3.1.x**; works with any 3.x deployment that exposes the REST API.
 
-`akt` drives an [Akaunting](https://akaunting.com) instance entirely from the
-command line: full create / read / update / delete for customers, vendors,
-items, invoices, bills, payments, accounts, categories, taxes, currencies and
-transfers — plus a `raw` escape hatch for any other API endpoint.
+[![PyPI Version](https://img.shields.io/pypi/v/akt-cli.svg?style=flat-square)](https://pypi.org/project/akt-cli/)
+[![Tests](https://img.shields.io/github/actions/workflow/status/AsyncAlchemist/akt-cli/ci.yml?branch=main&label=tests&style=flat-square)](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml)
+[![Integration](https://img.shields.io/github/actions/workflow/status/AsyncAlchemist/akt-cli/release.yml?label=integration&style=flat-square)](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/release.yml)
+[![Publish](https://img.shields.io/github/actions/workflow/status/AsyncAlchemist/akt-cli/publish.yml?label=publish&style=flat-square)](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/publish.yml)
+[![Codecov](https://codecov.io/gh/AsyncAlchemist/akt-cli/graph/badge.svg)](https://codecov.io/github/AsyncAlchemist/akt-cli)
 
-Built and tested against Akaunting **3.1.x**; it should work with any 3.x
-deployment that exposes the REST API.
+[![GitHub Release](https://img.shields.io/github/v/release/AsyncAlchemist/akt-cli?style=flat-square)](https://github.com/AsyncAlchemist/akt-cli/releases)
+[![Downloads](https://img.shields.io/pypi/dm/akt-cli.svg?style=flat-square&label=downloads)](https://pypi.org/project/akt-cli/)
+[![Python Version](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue.svg?style=flat-square)](https://pypi.org/project/akt-cli/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg?style=flat-square)](LICENSE)
+
+</div>
 
 ## Install
 
