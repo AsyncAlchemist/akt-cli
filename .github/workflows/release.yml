@@ -1,0 +1,49 @@
+name: Release (integration)
+
+# Full-surface integration tests against the live Akaunting deployment.
+# Runs on published releases and on demand. Creates real records and deletes
+# them again on teardown.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# never run two live suites at once (avoids state races on the shared instance)
+concurrency:
+  group: integration-live
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: Live integration tests
+    runs-on: ubuntu-latest
+    env:
+      # Connection details come only from secrets; never hard-coded here.
+      AKT_BASE_URL: ${{ secrets.AKT_BASE_URL }}
+      AKT_EMAIL: ${{ secrets.AKT_EMAIL }}
+      AKT_PASSWORD: ${{ secrets.AKT_PASSWORD }}
+      # Pace requests to stay under host bot-protection / rate limits.
+      AKT_THROTTLE: "0.5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Unit tests (sanity)
+        run: uv run pytest tests/unit -q
+
+      - name: Live integration tests
+        run: uv run pytest tests/integration -v

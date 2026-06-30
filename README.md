@@ -1,5 +1,9 @@
 # akt — Akaunting CLI toolbox
 
+[![CI](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/AsyncAlchemist/akt-cli/graph/badge.svg)](https://codecov.io/gh/AsyncAlchemist/akt-cli)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 `akt` drives an [Akaunting](https://akaunting.com) instance entirely from the
 command line: full create / read / update / delete for customers, vendors,
 items, invoices, bills, payments, accounts, categories, taxes, currencies and
@@ -172,11 +176,39 @@ timing out. `akt` retries throttle/WAF responses with backoff, and
 use `--throttle 1` for bulk work. A durable fix is to whitelist your IP in the
 host firewall.
 
-## Development
+## Testing
+
+Tests are split in two:
+
+* **`tests/unit/`** — offline tests for the body builders and arg parsing. No
+  network. This is what CI runs by default and what gates pull requests.
+* **`tests/integration/`** — drive the real `akt` CLI against a live Akaunting
+  instance, exercising the full surface (contacts, items, bill → payment →
+  paid, transfers, …). Every record they create is deleted on teardown — even
+  on failure — so no invoices, bills or payments are left behind.
 
 ```bash
-uv run pytest          # offline tests for body builders & arg parsing
+uv run pytest tests/unit                 # fast, offline (default)
+uv run pytest                            # integration tests auto-skip without creds
+
+# Run integration tests against a deployment:
+AKT_BASE_URL=https://accounting.example.com \
+AKT_EMAIL=admin@example.com \
+AKT_PASSWORD=… \
+uv run pytest tests/integration -v
 ```
+
+> Invoice creation is `xfail`-ed when the host's plan-limit gate is active (see
+> above); the rest of the suite must pass.
+
+### CI / CD
+
+* **CI** (`.github/workflows/ci.yml`) runs on every push and PR: unit tests +
+  coverage, uploaded to [Codecov](https://codecov.io/gh/AsyncAlchemist/akt-cli).
+* **Release** (`.github/workflows/release.yml`) runs the live integration suite
+  on published releases (and via *Run workflow*). Connection details come from
+  GitHub Actions **secrets** (`AKT_BASE_URL`, `AKT_EMAIL`, `AKT_PASSWORD`) — they
+  are never committed and are masked in logs.
 
 The code is small and declarative:
 

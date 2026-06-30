@@ -35,7 +35,15 @@ build-backend = "uv_build"
 extraPaths = ["src"]
 reportMissingModuleSource = false
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: offline tests with no network access (default CI)",
+    "integration: drive the CLI against a live Akaunting instance (needs AKT_* env)",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-cov>=5.0",
 ]

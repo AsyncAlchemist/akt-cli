@@ -22,6 +22,8 @@ from akt.resources import (
 )
 from akt.cli import _build_parser
 
+pytestmark = pytest.mark.unit
+
 
 class FakeClient:
     """Stand-in for akt.client.Client with canned lookups."""
