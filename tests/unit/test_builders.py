@@ -18,6 +18,7 @@ from akt.resources import (
     build_document_create,
     build_document_update,
     build_payment_create,
+    resolve_payment_delete,
     body_from_fields,
 )
 from akt.cli import _build_parser
@@ -29,12 +30,13 @@ class FakeClient:
     """Stand-in for akt.client.Client with canned lookups."""
 
     def __init__(self, *, contacts=None, documents=None, settings=None, docs_list=None,
-                 txns_list=None):
+                 txns_list=None, transactions=None):
         self._contacts = contacts or {}
         self._documents = documents or {}
         self._settings = settings or {}
         self._docs_list = docs_list or []
         self._txns_list = txns_list or []
+        self._transactions = transactions or {}
 
     def show(self, path, ident, *, type_scope=None):
         ident = str(ident)
@@ -42,6 +44,8 @@ class FakeClient:
             return self._contacts[ident]
         if path == "documents":
             return self._documents[ident]
+        if path == "transactions":
+            return self._transactions[ident]
         raise KeyError(path)
 
     def setting(self, key, default=None):
@@ -251,6 +255,23 @@ def test_payment_requires_amount_when_standalone():
     client = FakeClient(settings={"default.income_category": "2", "default.account": "1"})
     with pytest.raises(ValueError):
         build_payment_create(PAYMENT, client, _payment_ns(type="income"))
+
+
+def test_delete_document_payment_uses_nested_route():
+    """A payment linked to a bill/invoice must delete via the nested route."""
+    client = FakeClient(transactions={
+        "16": {"id": 16, "type": "expense", "document_id": 7},
+        "20": {"id": 20, "type": "income", "document_id": 3},
+    })
+    assert resolve_payment_delete(PAYMENT, client, "16") == ("documents/7/transactions/16", "bill")
+    assert resolve_payment_delete(PAYMENT, client, "20") == ("documents/3/transactions/20", "invoice")
+
+
+def test_delete_standalone_payment_uses_flat_route():
+    client = FakeClient(transactions={
+        "2": {"id": 2, "type": "income", "document_id": None},
+    })
+    assert resolve_payment_delete(PAYMENT, client, "2") == ("transactions/2", None)
 
 
 # --------------------------------------------------------------------------

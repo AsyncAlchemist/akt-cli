@@ -9,6 +9,7 @@ from .resources import (
     build_document_update,
     build_payment_create,
     build_transfer_create,
+    resolve_payment_delete,
 )
 
 # Common column sets
@@ -228,6 +229,7 @@ PAYMENT = Resource(
     columns=_TXN_COLS,
     supports_toggle=False,
     build_create=build_payment_create,
+    delete_resolver=resolve_payment_delete,
     help="Payments / transactions (income & expense)",
 )
 

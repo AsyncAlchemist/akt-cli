@@ -55,6 +55,8 @@ class Resource:
     # hooks (override for documents/payments)
     build_create: Callable[["Resource", Client, Any], dict] | None = None
     build_update: Callable[["Resource", Client, Any, dict], dict] | None = None
+    # returns (path, type_scope) for delete; lets payments use the nested route
+    delete_resolver: Callable[["Resource", Client, str], "tuple[str, str | None]"] | None = None
 
     def contact_scope(self) -> str:
         """ACL scope of the contact tied to a document resource."""
@@ -425,6 +427,21 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
         body["__endpoint__"] = f"documents/{int(document_id)}/transactions"
         body["__type_scope__"] = doc_scope
     return body
+
+
+def resolve_payment_delete(res: Resource, client: Client, ident: str) -> "tuple[str, str | None]":
+    """A payment linked to a document must be deleted via the nested route
+    DELETE /documents/{doc}/transactions/{id} (the flat /transactions endpoint
+    rejects it). Standalone payments/transfers delete via /transactions/{id}."""
+    try:
+        txn = client.show("transactions", ident)
+    except Exception:
+        return f"transactions/{ident}", None
+    doc_id = txn.get("document_id")
+    if doc_id:
+        scope = "invoice" if txn.get("type") == "income" else "bill"
+        return f"documents/{doc_id}/transactions/{ident}", scope
+    return f"transactions/{ident}", None
 
 
 def build_transfer_create(res: Resource, client: Client, ns: Any) -> dict:

@@ -64,7 +64,11 @@ def cmd_update(res: Resource, client: Client, ns: Any) -> int:
 
 
 def cmd_delete(res: Resource, client: Client, ns: Any) -> int:
-    client.delete(f"{res.endpoint}/{ns.id}", type_scope=res.type_scope)
+    if res.delete_resolver:
+        path, type_scope = res.delete_resolver(res, client, str(ns.id))
+    else:
+        path, type_scope = f"{res.endpoint}/{ns.id}", res.type_scope
+    client.delete(path, type_scope=type_scope)
     print(f"deleted {res.noun} {ns.id}")
     return 0
 
