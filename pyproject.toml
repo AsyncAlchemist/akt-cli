@@ -28,7 +28,7 @@ Issues = "https://github.com/AsyncAlchemist/akt-cli/issues"
 akt = "akt.cli:main"
 
 [build-system]
-requires = ["uv_build>=0.11.14,<0.12.0"]
+requires = ["uv_build>=0.11.26,<0.12.0"]
 build-backend = "uv_build"
 
 # Distribution is "akt-cli" but the import package + command stay "akt".
