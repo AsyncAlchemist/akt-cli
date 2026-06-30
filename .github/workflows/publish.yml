@@ -1,15 +1,16 @@
 name: Publish (PyPI)
 
-# Builds the distribution and publishes it to PyPI on a published GitHub
-# Release, using PyPI Trusted Publishing (OIDC) — no API token is stored.
+# Builds the distribution and publishes via PyPI Trusted Publishing (OIDC) —
+# no API token is stored.
+#   * workflow_dispatch  -> TestPyPI  (verification)
+#   * published release  -> PyPI      (official)
 #
-# One-time PyPI setup (done in the PyPI account UI, not here):
-#   PyPI -> Account -> Publishing -> Add a pending publisher
+# One-time setup on (Test)PyPI -> Account -> Publishing -> Add a pending publisher:
 #     PyPI Project Name : akt-cli
 #     Owner             : AsyncAlchemist
 #     Repository name   : akt-cli
 #     Workflow name     : publish.yml
-#     Environment name  : pypi
+#     Environment name  : pypi      (on PyPI)   /   testpypi  (on TestPyPI)
 
 on:
   release:
@@ -41,21 +42,38 @@ jobs:
           name: dist
           path: dist/
 
-  publish:
+  testpypi:
+    name: Publish to TestPyPI
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/akt-cli/
+    permissions:
+      id-token: write  # Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
     name: Publish to PyPI
+    if: github.event_name == 'release'
     needs: build
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/project/akt-cli/
     permissions:
-      id-token: write  # required for Trusted Publishing (OIDC)
+      id-token: write  # Trusted Publishing (OIDC)
     steps:
-      - name: Download built distribution
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@release/v1
