@@ -1,5 +1,6 @@
 # akt — Akaunting CLI toolbox
 
+[![PyPI](https://img.shields.io/pypi/v/akt-cli.svg)](https://pypi.org/project/akt-cli/)
 [![CI](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/AsyncAlchemist/akt-cli/graph/badge.svg)](https://codecov.io/gh/AsyncAlchemist/akt-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -14,18 +15,22 @@ deployment that exposes the REST API.
 
 ## Install
 
-The project is managed with [uv](https://docs.astral.sh/uv/).
+From PyPI (the distribution is `akt-cli`; the command is `akt`):
+
+```bash
+uv tool install akt-cli     # installs the `akt` command globally
+# or
+pip install akt-cli
+# or run without installing
+uvx --from akt-cli akt --help
+```
+
+From a checkout (the project is managed with [uv](https://docs.astral.sh/uv/)):
 
 ```bash
 uv sync                 # create .venv and install
 uv run akt --help       # run without activating
-```
-
-Or expose it on your PATH:
-
-```bash
-uv tool install .       # installs the `akt` command globally
-akt --help
+uv tool install .       # install the `akt` command from source
 ```
 
 ## Configuration
@@ -209,6 +214,25 @@ uv run pytest tests/integration -v
   on published releases (and via *Run workflow*). Connection details come from
   GitHub Actions **secrets** (`AKT_BASE_URL`, `AKT_EMAIL`, `AKT_PASSWORD`) — they
   are never committed and are masked in logs.
+* **Publish** (`.github/workflows/publish.yml`) builds the sdist + wheel and
+  uploads them to PyPI on a published release, via **Trusted Publishing (OIDC)**
+  — no API token is stored.
+
+### Releasing to PyPI
+
+One-time setup on PyPI (Account → Publishing → *Add a pending publisher*):
+
+| Field | Value |
+|-------|-------|
+| PyPI Project Name | `akt-cli` |
+| Owner | `AsyncAlchemist` |
+| Repository name | `akt-cli` |
+| Workflow name | `publish.yml` |
+| Environment name | `pypi` |
+
+Then, to cut a release: bump `version` in `pyproject.toml`, push, and publish a
+GitHub Release for the matching tag. That fires the integration suite and the
+PyPI publish automatically.
 
 The code is small and declarative:
 

@@ -1,9 +1,10 @@
 [project]
-name = "akt"
+name = "akt-cli"
 version = "0.1.0"
 description = "akt — a CLI toolbox to fully drive an Akaunting accounting instance"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "AsyncAlchemist" }
 ]
@@ -11,7 +12,6 @@ requires-python = ">=3.12"
 keywords = ["akaunting", "accounting", "cli", "invoices", "bills", "api"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Environment :: Console",
     "Topic :: Office/Business :: Financial :: Accounting",
 ]
@@ -30,6 +30,11 @@ akt = "akt.cli:main"
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]
 build-backend = "uv_build"
+
+# Distribution is "akt-cli" but the import package + command stay "akt".
+[tool.uv.build-backend]
+module-name = "akt"
+module-root = "src"
 
 [tool.pyright]
 extraPaths = ["src"]
