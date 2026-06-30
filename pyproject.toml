@@ -1,0 +1,41 @@
+[project]
+name = "akt"
+version = "0.1.0"
+description = "akt — a CLI toolbox to fully drive an Akaunting accounting instance"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "AsyncAlchemist" }
+]
+requires-python = ">=3.12"
+keywords = ["akaunting", "accounting", "cli", "invoices", "bills", "api"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Environment :: Console",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.urls]
+Homepage = "https://github.com/AsyncAlchemist/akt-cli"
+Repository = "https://github.com/AsyncAlchemist/akt-cli"
+Issues = "https://github.com/AsyncAlchemist/akt-cli/issues"
+
+[project.scripts]
+akt = "akt.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.pyright]
+extraPaths = ["src"]
+reportMissingModuleSource = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
