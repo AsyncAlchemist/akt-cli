@@ -3,7 +3,7 @@
 # akt — Akaunting CLI toolbox
 ### Drive your Akaunting accounting instance entirely from the command line
 
->`akt` gives you full create / read / update / delete for customers, vendors, items, invoices, bills, payments, accounts, categories, taxes, currencies and transfers — plus a `raw` escape hatch for any other endpoint. Built and tested against [Akaunting](https://akaunting.com) **3.1.x**; works with any 3.x deployment that exposes the REST API.
+>`akt` gives you full create / read / update / delete for customers, vendors, items, invoices, bills, payments, accounts, categories, taxes, currencies and transfers — plus double-entry journal entries and the chart of accounts, and a `raw` escape hatch for any other endpoint. Built and tested against [Akaunting](https://akaunting.com) **3.1.x**; works with any 3.x deployment that exposes the REST API.
 
 [![PyPI Version](https://img.shields.io/pypi/v/akt-cli.svg?style=flat-square)](https://pypi.org/project/akt-cli/)
 [![Tests](https://img.shields.io/github/actions/workflow/status/AsyncAlchemist/akt-cli/ci.yml?branch=main&label=tests&style=flat-square)](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml)
@@ -80,7 +80,17 @@ Akaunting folds several nouns onto shared endpoints; `akt` hides that:
 | `invoice`  | `documents`    | document of type `invoice`                         |
 | `bill`     | `documents`    | document of type `bill`                            |
 | `payment`  | `transactions` | income (invoice) or expense (bill) transaction    |
+| `journal-entry` | `journal-entry` | double-entry general-ledger entry (module)     |
+| `chart-of-account` | `chart-of-accounts` | GL accounts — read via API, CRUD via web    |
 | `item`, `account`, `category`, `tax`, `currency`, `transfer` | as named | |
+
+> `journal-entry` and `chart-of-account` require the **Double-Entry** module
+> installed on the instance. The module publishes chart-of-accounts read-only on
+> the `/api` surface (index/show); its create/update/delete live only on the
+> session/CSRF **web** route. `akt chart-of-account` gives you the full verb set
+> anyway — `list`/`get` hit `/api`, while `create`/`update`/`delete` transparently
+> drive the web CRUD with your admin session (the same mechanism
+> `download-attachment` already uses).
 
 > The `contacts` and `documents` endpoints derive their permission from a
 > `search=type:<x>` query param. `akt` injects this automatically — calling them
@@ -160,6 +170,29 @@ akt bill attachments 41                             # list attached files
 akt bill download-attachment 41 --out ./downloads   # save to disk
 akt payment update 57 --remove-attachment           # clear attachments
 
+# Double-entry general ledger (requires the Double-Entry module)
+akt chart-of-account list                              # read the chart of accounts
+akt chart-of-account get 12
+
+# Build the chart of accounts as code (create/update/delete run via the web
+# session; type-id is the double-entry account-type id — copy it from an
+# existing account's `type_id`)
+akt chart-of-account create --name "Cash on Hand" --code 1010 --type-id 6
+akt chart-of-account create --name "Petty Cash" --code 1011 --type-id 6 --account-id 12
+akt chart-of-account update 12 --code 1000 --description "Operating cash"
+akt chart-of-account delete 12
+
+# Post a balanced journal entry (>= 2 lines; debits must equal credits;
+# journal number auto-generated, basis defaults to accrual)
+akt journal-entry create --description "Owner capital contribution" \
+    --item 'account_id=10,debit=5000' \
+    --item 'account_id=30,credit=5000'
+akt journal-entry list
+akt journal-entry update 4 --description "Corrected memo"
+akt journal-entry create --description "Vendor bill accrual" --basis accrual \
+    --item 'account_id=60,debit=250' --item 'account_id=21,credit=250' \
+    --attachment ./invoice.pdf
+
 # Anything else: raw API access
 akt raw GET reports
 akt raw POST items --data '{"name":"Ad-hoc","type":"service","sale_price":99}'
@@ -195,6 +228,23 @@ Driving Akaunting's API directly has sharp edges; `akt` papers over these:
   size) comes from the `/api` record itself.
 * **Full-replace updates** — Akaunting PUT re-validates required fields, so
   `akt` merges your changes onto the current record.
+* **Journal entries must balance** — a `journal-entry` needs >= 2 lines whose
+  debits equal its credits; `akt` validates this client-side (clear error)
+  before hitting the API. Each line carries both a `debit` and a `credit` key
+  (the unused side sent as `0`) because Akaunting validates both as required.
+* **Journal updates re-derive ledgers** — like documents, a journal update
+  deletes any ledger line absent from the request. `akt` resends the existing
+  lines (with their ledger ids) so an update that only changes a field doesn't
+  wipe the entry, and auto-generates the `journal_number` from the module's
+  `double-entry.journal.number_*` settings when you don't pass one.
+* **Chart-of-accounts CRUD is web-only** — the Double-Entry module exposes
+  accounts read-only on `/api`; create/update/delete exist solely on the
+  session/CSRF web route. `akt chart-of-account create|update|delete` logs in a
+  web session (reusing your admin credentials, cached for the process), attaches
+  the CSRF token, and unwraps Akaunting's `{success, error, data, message}` AJAX
+  envelope — so a server-side block (e.g. *deleting an account that has ledgers*)
+  surfaces as a normal error. Updates resend `name` (required by Akaunting on
+  update) from the current record when you don't pass one.
 
 ### Invoice creation may be gated by a plan check
 

@@ -5,8 +5,12 @@ from __future__ import annotations
 from .resources import (
     Resource,
     f,
+    build_account_create,
+    build_account_update,
     build_document_create,
     build_document_update,
+    build_journal_create,
+    build_journal_update,
     build_payment_create,
     build_transfer_create,
     resolve_payment_delete,
@@ -260,9 +264,65 @@ TRANSFER = Resource(
 )
 
 
+# Double-entry (general ledger) -------------------------------------------
+
+# The DoubleEntry module publishes chart-of-accounts READ-ONLY over the API
+# (index/show only). Create/update/delete exist only on the session/CSRF web
+# CRUD route, so those verbs are driven through client.web_json (web_endpoint)
+# while list/get keep using the /api surface (endpoint). journal-entry is full
+# API CRUD.
+
+CHART_OF_ACCOUNT = Resource(
+    noun="chart-of-account",
+    endpoint="chart-of-accounts",
+    web_endpoint="double-entry/chart-of-accounts",
+    fields=[
+        f("name", "Account name", required=True),
+        f("code", "Account code (unique integer per company)"),
+        f("type-id", "Double-entry account type id (see an existing account's type_id)"),
+        f("account-id", "Parent account id (makes this a sub-account)"),
+        f("description", "Description"),
+        f("enabled", "Enable the record", is_flag=True, default=1),
+    ],
+    columns=[
+        ("ID", "id"), ("Code", "code"), ("Name", "name"), ("Type", "type_id"),
+        ("Parent", "account_id"), ("Enabled", "enabled"),
+    ],
+    supports_toggle=False,
+    build_create=build_account_create,
+    build_update=build_account_update,
+    help="Chart of accounts (read via API; create/update/delete via web, double-entry module)",
+)
+
+JOURNAL_ENTRY = Resource(
+    noun="journal-entry",
+    endpoint="journal-entry",
+    fields=[
+        f("journal-number", "Journal number (auto-generated if omitted)"),
+        f("paid-at", "Entry date (YYYY-MM-DD; defaults to today)"),
+        f("description", "Description", required=True),
+        f("basis", "cash | accrual", default="accrual", choices=["cash", "accrual"]),
+        f("reference", "Reference"),
+        f("currency-code", "Currency code", default="USD"),
+        f("currency-rate", "Currency rate", default=1),
+    ],
+    columns=[
+        ("ID", "id"), ("Number", "journal_number"), ("Date", "paid_at"),
+        ("Amount", "amount_formatted"), ("Basis", "basis"),
+        ("Description", "description"),
+    ],
+    supports_toggle=False,
+    supports_attachments=True,
+    build_create=build_journal_create,
+    build_update=build_journal_update,
+    help="Journal entries (double-entry general ledger)",
+)
+
+
 RESOURCES: list[Resource] = [
     CUSTOMER, VENDOR, ITEM, ACCOUNT, CATEGORY, TAX, CURRENCY,
     INVOICE, BILL, PAYMENT, TRANSFER,
+    CHART_OF_ACCOUNT, JOURNAL_ENTRY,
 ]
 
 BY_NOUN = {r.noun: r for r in RESOURCES}

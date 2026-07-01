@@ -223,3 +223,80 @@ def test_csrf_token_falls_back_to_xsrf_cookie():
     assert c._csrf_token('<input name="_token" value="FORM">') == "FORM"
     sess.cookies = {"XSRF-TOKEN": "cookie%2Dval"}
     assert c._csrf_token("<html>no token</html>") == "cookie-val"
+
+
+# --------------------------------------------------------------------------
+# web_json — session/CSRF web-surface CRUD (chart-of-accounts)
+# --------------------------------------------------------------------------
+
+def _login_queue(sess):
+    # GET /auth/login (form token) then POST /auth/login. Akaunting (Laravel)
+    # sets an encrypted XSRF-TOKEN cookie the frontend echoes back as a header;
+    # simulate that cookie being present after login.
+    sess.queue(_Resp(text='<input name="_token" value="TOK">'))
+    sess.queue(_Resp())
+    sess.cookies = {"XSRF-TOKEN": "enc%2Dtoken"}      # url-encoded encrypted token
+
+
+def test_web_json_logs_in_attaches_csrf_and_unwraps_envelope():
+    c, sess = _client_with_fake()
+    _login_queue(sess)
+    sess.queue(_Resp(content=b'{"success":true,"error":false,'
+                             b'"data":{"id":99,"code":1010},"message":""}'))
+
+    data = c.web_json("POST", "double-entry/chart-of-accounts",
+                      [("name", "Cash"), ("code", "1010")])
+    assert data == {"id": 99, "code": 1010}          # envelope unwrapped to .data
+
+    method, url, kw = sess.calls[-1]
+    assert method == "POST"
+    assert url == "https://acct.example.com/1/double-entry/chart-of-accounts"
+    assert kw["data"] == [("name", "Cash"), ("code", "1010")]
+    assert kw["allow_redirects"] is False
+    h = kw["headers"]
+    # Laravel decrypts the XSRF-TOKEN cookie echoed in X-XSRF-TOKEN (url-decoded)
+    assert h["X-XSRF-TOKEN"] == "enc-token"
+    assert h["X-Requested-With"] == "XMLHttpRequest"
+    assert h["Accept"] == "application/json"
+    assert h["Content-Type"] is None                 # let requests url-encode
+
+
+def test_web_json_patch_and_delete_paths():
+    c, sess = _client_with_fake()
+    _login_queue(sess)
+    sess.queue(_Resp(content=b'{"success":true,"error":false,"data":{"id":5},"message":""}'))
+    c.web_json("PATCH", "double-entry/chart-of-accounts/5", [("name", "Cash")])
+    method, url, _ = sess.calls[-1]
+    assert method == "PATCH"                          # real method, no _method spoof
+    assert url.endswith("/1/double-entry/chart-of-accounts/5")
+
+
+def test_web_json_raises_on_business_rule_failure_envelope():
+    """A 200 with {success:false, error:true} (e.g. account has ledgers) must raise."""
+    from akt.client import ApiError
+    c, sess = _client_with_fake()
+    _login_queue(sess)
+    sess.queue(_Resp(content=b'{"success":false,"error":true,"data":null,'
+                             b'"message":"Cannot delete: has ledgers"}'))
+    with pytest.raises(ApiError, match="has ledgers"):
+        c.web_json("DELETE", "double-entry/chart-of-accounts/5")
+
+
+def test_web_json_raises_on_redirect():
+    """A 302 means the session isn't authenticated / CSRF was rejected."""
+    from akt.client import ApiError
+    c, sess = _client_with_fake()
+    _login_queue(sess)
+    sess.queue(_Resp(status=302))
+    with pytest.raises(ApiError, match="redirect"):
+        c.web_json("POST", "double-entry/chart-of-accounts", [("name", "X")])
+
+
+def test_web_json_login_cached_across_calls():
+    c, sess = _client_with_fake()
+    _login_queue(sess)
+    sess.queue(_Resp(content=b'{"success":true,"error":false,"data":{"id":1},"message":""}'))
+    sess.queue(_Resp(content=b'{"success":true,"error":false,"data":{"id":2},"message":""}'))
+    c.web_json("POST", "double-entry/chart-of-accounts", [("name", "A")])
+    c.web_json("POST", "double-entry/chart-of-accounts", [("name", "B")])
+    assert len(sess.posts) == 1                       # single login round-trip

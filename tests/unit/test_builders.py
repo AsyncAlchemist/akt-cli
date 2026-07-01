@@ -11,12 +11,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from akt.registry import INVOICE, BILL, PAYMENT, BY_NOUN
+from akt.registry import INVOICE, BILL, PAYMENT, JOURNAL_ENTRY, CHART_OF_ACCOUNT, BY_NOUN
 from akt.resources import (
     parse_item,
+    parse_journal_item,
     parse_set,
+    build_account_create,
+    build_account_update,
     build_document_create,
     build_document_update,
+    build_journal_create,
+    build_journal_update,
     build_payment_create,
     resolve_payment_delete,
     resolve_payment_update,
@@ -33,13 +38,14 @@ class FakeClient:
     """Stand-in for akt.client.Client with canned lookups."""
 
     def __init__(self, *, contacts=None, documents=None, settings=None, docs_list=None,
-                 txns_list=None, transactions=None):
+                 txns_list=None, transactions=None, journals_list=None):
         self._contacts = contacts or {}
         self._documents = documents or {}
         self._settings = settings or {}
         self._docs_list = docs_list or []
         self._txns_list = txns_list or []
         self._transactions = transactions or {}
+        self._journals_list = journals_list or []
 
     def show(self, path, ident, *, type_scope=None):
         ident = str(ident)
@@ -59,6 +65,8 @@ class FakeClient:
             return self._docs_list
         if path == "transactions":
             return self._txns_list
+        if path == "journal-entry":
+            return self._journals_list
         return []
 
 
@@ -278,6 +286,151 @@ def test_delete_standalone_payment_uses_flat_route():
 
 
 # --------------------------------------------------------------------------
+# journal entry (double-entry) builder
+# --------------------------------------------------------------------------
+
+def _journal_ns(**over):
+    base = dict(journal_number=None, paid_at=None, description="Opening balances",
+                basis=None, reference=None, currency_code=None, currency_rate=None,
+                item=["account_id=10,debit=100", "account_id=20,credit=100"],
+                set_=None, data=None)
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_parse_journal_item_debit_and_credit_lines():
+    assert parse_journal_item("account_id=10,debit=100") == {"account_id": 10, "debit": 100}
+    assert parse_journal_item("account_id=20,credit=50.5") == {"account_id": 20, "credit": 50.5}
+
+
+def test_parse_journal_item_requires_account_and_side():
+    with pytest.raises(ValueError):
+        parse_journal_item("debit=100")               # no account_id
+    with pytest.raises(ValueError):
+        parse_journal_item("account_id=10")           # neither debit nor credit
+
+
+def test_build_journal_create_balances_and_autonumbers():
+    client = FakeClient(
+        settings={"double-entry.journal.number_prefix": "MJE-",
+                  "double-entry.journal.number_digit": "5"},
+        journals_list=[{"journal_number": "MJE-00007"}],
+    )
+    body = build_journal_create(JOURNAL_ENTRY, client, _journal_ns(basis="cash"))
+    assert body["journal_number"] == "MJE-00008"      # max(7)+1, padded to 5
+    assert body["basis"] == "cash"
+    assert body["currency_code"] == "USD"             # default
+    assert body["amount"] == 0                         # server recomputes
+    # both debit & credit keys present on every line (Akaunting validates both)
+    assert body["items"][0] == {"account_id": 10, "debit": 100, "credit": 0}
+    assert body["items"][1] == {"account_id": 20, "credit": 100, "debit": 0}
+
+
+def test_build_journal_create_defaults_basis_accrual():
+    client = FakeClient(journals_list=[])
+    body = build_journal_create(JOURNAL_ENTRY, client, _journal_ns(journal_number="JE-1"))
+    assert body["basis"] == "accrual"
+    assert body["journal_number"] == "JE-1"
+
+
+def test_build_journal_create_rejects_imbalance():
+    client = FakeClient(journals_list=[])
+    ns = _journal_ns(item=["account_id=10,debit=100", "account_id=20,credit=90"])
+    with pytest.raises(ValueError, match="does not balance"):
+        build_journal_create(JOURNAL_ENTRY, client, ns)
+
+
+def test_build_journal_create_requires_two_lines():
+    client = FakeClient(journals_list=[])
+    ns = _journal_ns(item=["account_id=10,debit=100"])
+    with pytest.raises(ValueError, match="at least 2"):
+        build_journal_create(JOURNAL_ENTRY, client, ns)
+
+
+def test_build_journal_create_requires_description():
+    client = FakeClient(journals_list=[])
+    with pytest.raises(ValueError, match="description"):
+        build_journal_create(JOURNAL_ENTRY, client, _journal_ns(description=None))
+
+
+def test_build_journal_update_preserves_ledgers_with_ids():
+    """Regression: an update that only changes one field must resend the ledger
+    lines (with their ids) so Akaunting doesn't delete the untouched rows."""
+    current = {
+        "paid_at": "2026-01-01T00:00:00+00:00", "journal_number": "MJE-1",
+        "description": "orig", "basis": "accrual", "currency_code": "USD",
+        "currency_rate": 1,
+        "ledgers": {"data": [
+            {"id": 5, "account_id": 10, "debit": 100, "credit": None},
+            {"id": 6, "account_id": 20, "debit": None, "credit": 100},
+        ]},
+    }
+    ns = _journal_ns(description="revised", item=None)
+    body = build_journal_update(JOURNAL_ENTRY, FakeClient(), ns, current)
+    assert body["description"] == "revised"           # overlay applied
+    assert body["amount"] == 0                          # server recomputes
+    assert body["items"] == [
+        {"account_id": 10, "debit": 100.0, "credit": 0.0, "id": 5},
+        {"account_id": 20, "debit": 0.0, "credit": 100.0, "id": 6},
+    ]
+
+
+# --------------------------------------------------------------------------
+# chart-of-accounts (web-surface CRUD) builder
+# --------------------------------------------------------------------------
+
+def _account_ns(**over):
+    base = dict(name=None, code=None, type_id=None, account_id=None,
+                description=None, enabled=None, set_=None, data=None)
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def test_chart_of_account_routes_crud_through_web():
+    assert CHART_OF_ACCOUNT.read_only is False
+    assert CHART_OF_ACCOUNT.web_endpoint == "double-entry/chart-of-accounts"
+    # list/get stay on the /api surface
+    assert CHART_OF_ACCOUNT.endpoint == "chart-of-accounts"
+
+
+def test_build_account_create_top_level():
+    body = build_account_create(
+        CHART_OF_ACCOUNT, FakeClient(),
+        _account_ns(name="Cash", code="1010", type_id="6"),
+    )
+    assert body["name"] == "Cash"
+    assert body["code"] == "1010"
+    assert body["type_id"] == "6"
+    assert body["enabled"] == 1                 # flag default
+    assert body["is_sub_account"] == "false"    # no parent
+
+
+def test_build_account_create_sub_account():
+    body = build_account_create(
+        CHART_OF_ACCOUNT, FakeClient(),
+        _account_ns(name="Petty Cash", code="1011", type_id="6", account_id="42"),
+    )
+    assert body["account_id"] == "42"
+    assert body["is_sub_account"] == "true"     # parent supplied
+
+
+def test_build_account_create_requires_name():
+    with pytest.raises(ValueError, match="name"):
+        build_account_create(CHART_OF_ACCOUNT, FakeClient(), _account_ns(code="1010"))
+
+
+def test_build_account_update_backfills_required_name():
+    current = {"id": 5, "name": "Cash", "code": 1010, "type_id": 6,
+               "account_id": None, "enabled": 1, "description": None}
+    # change only the code; name (required by Akaunting on update) is resent
+    body = build_account_update(CHART_OF_ACCOUNT, FakeClient(),
+                                _account_ns(code="1099"), current)
+    assert body["name"] == "Cash"
+    assert body["code"] == "1099"
+    assert body["is_sub_account"] == "false"
+
+
+# --------------------------------------------------------------------------
 # generic field body + arg-parsing collision regression
 # --------------------------------------------------------------------------
 
@@ -310,6 +463,28 @@ def test_json_flag_works_after_verb():
     parser = _build_parser()
     ns = parser.parse_args(["customer", "list", "--json"])
     assert getattr(ns, "json", False) is True
+
+
+def _verbs_for(parser, noun):
+    import argparse
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    rp = sub.choices[noun]
+    vsub = next(a for a in rp._actions if isinstance(a, argparse._SubParsersAction))
+    return set(vsub.choices)
+
+
+def test_chart_of_account_exposes_full_crud_no_toggle():
+    verbs = _verbs_for(_build_parser(), "chart-of-account")
+    assert {"list", "get", "create", "update", "delete"} <= verbs
+    # no enable/disable (supports_toggle=False) and no attachment verbs
+    assert "enable" not in verbs and "attachments" not in verbs
+
+
+def test_journal_entry_exposes_full_crud_and_attachments():
+    verbs = _verbs_for(_build_parser(), "journal-entry")
+    assert {"list", "get", "create", "update", "delete",
+            "attachments", "download-attachment"} <= verbs
+    assert "enable" not in verbs        # no enable/disable API route
 
 
 # --------------------------------------------------------------------------

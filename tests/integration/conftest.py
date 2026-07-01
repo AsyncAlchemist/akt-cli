@@ -30,6 +30,7 @@ _REQUIRED = ("AKT_BASE_URL", "AKT_EMAIL", "AKT_PASSWORD")
 # documents before contacts, items/accounts last). Lower number = deleted first.
 _DELETE_PRIORITY = {
     "payment": 0,
+    "journal-entry": 0,
     "transfer": 1,
     "invoice": 2,
     "bill": 2,
@@ -40,6 +41,7 @@ _DELETE_PRIORITY = {
     "category": 4,
     "tax": 4,
     "currency": 4,
+    "chart-of-account": 4,
 }
 
 

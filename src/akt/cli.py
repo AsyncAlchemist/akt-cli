@@ -40,6 +40,10 @@ def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bo
     if res.endpoint == "documents":
         p.add_argument("--item", action="append", metavar="K=V,...",
                        help="line item, e.g. 'name=Widget,price=10,quantity=2,tax_id=1' (repeatable)")
+    elif res.endpoint == "journal-entry":
+        p.add_argument("--item", action="append", metavar="K=V,...",
+                       help="ledger line (>= 2, must balance), e.g. "
+                            "'account_id=10,debit=100' or 'account_id=20,credit=100' (repeatable)")
     if res.supports_attachments:
         p.add_argument("--attachment", action="append", metavar="PATH",
                        help="attach a file (pdf/jpg/png, repeatable); switches the "
@@ -97,18 +101,21 @@ def _build_parser() -> argparse.ArgumentParser:
         gp.add_argument("id")
         gp.set_defaults(_handler=lambda res, c, ns: cmd_get(res, c, ns))
 
-        cp = verbs.add_parser("create", parents=[common], help=f"Create a {res.noun}")
-        _add_field_args(cp, res, for_update=False)
-        cp.set_defaults(_handler=lambda res, c, ns: cmd_create(res, c, ns))
+        # Read-only resources (e.g. chart-of-accounts) expose only list/get; the
+        # API has no create/update/delete route for them.
+        if not res.read_only:
+            cp = verbs.add_parser("create", parents=[common], help=f"Create a {res.noun}")
+            _add_field_args(cp, res, for_update=False)
+            cp.set_defaults(_handler=lambda res, c, ns: cmd_create(res, c, ns))
 
-        up = verbs.add_parser("update", parents=[common], help=f"Update a {res.noun}")
-        up.add_argument("id")
-        _add_field_args(up, res, for_update=True)
-        up.set_defaults(_handler=lambda res, c, ns: cmd_update(res, c, ns))
+            up = verbs.add_parser("update", parents=[common], help=f"Update a {res.noun}")
+            up.add_argument("id")
+            _add_field_args(up, res, for_update=True)
+            up.set_defaults(_handler=lambda res, c, ns: cmd_update(res, c, ns))
 
-        dp = verbs.add_parser("delete", parents=[common], help=f"Delete a {res.noun}")
-        dp.add_argument("id")
-        dp.set_defaults(_handler=lambda res, c, ns: cmd_delete(res, c, ns))
+            dp = verbs.add_parser("delete", parents=[common], help=f"Delete a {res.noun}")
+            dp.add_argument("id")
+            dp.set_defaults(_handler=lambda res, c, ns: cmd_delete(res, c, ns))
 
         if res.supports_attachments:
             ap = verbs.add_parser("attachments", parents=[common],

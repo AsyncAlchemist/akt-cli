@@ -53,6 +53,11 @@ class Resource:
     search_default: str | None = None      # always-applied search filter
     supports_toggle: bool = True           # enable/disable verbs
     supports_attachments: bool = False     # --attachment upload + attachments/download verbs
+    read_only: bool = False                # expose only list/get (no create/update/delete)
+    # When set, create/update/delete are driven through the session-authenticated
+    # web route (client.web_json) at this path instead of the /api surface — for
+    # resources whose CRUD Akaunting exposes only on the web (e.g. chart-of-accounts).
+    web_endpoint: str | None = None
     help: str = ""
 
     # hooks (override for documents/payments)
@@ -551,3 +556,190 @@ def _next_transaction_number(client: Client) -> str:
         if tail:
             maxn = max(maxn, int(tail))
     return f"{pre}{maxn + 1:05d}"
+
+
+# --------------------------------------------------------------------------
+# journal entry (double-entry) body builder
+# --------------------------------------------------------------------------
+
+def parse_journal_item(spec: str) -> dict:
+    """Parse one journal line: ``account_id=10,debit=100`` or
+    ``account_id=20,credit=100`` (optional ``id=`` on update to target an
+    existing ledger, optional ``notes=``). A line carries a debit *or* a
+    credit; the omitted side defaults to 0."""
+    item: dict[str, Any] = {}
+    for part in spec.split(","):
+        if not part.strip():
+            continue
+        if "=" not in part:
+            raise ValueError(f"--item field must be key=value, got {part!r}")
+        k, _, v = part.partition("=")
+        item[k.strip()] = _coerce(v.strip())
+    if "account_id" not in item:
+        raise ValueError(f"--item requires an account_id=… field: {spec!r}")
+    if "debit" not in item and "credit" not in item:
+        raise ValueError(f"--item requires a debit=… or credit=… field: {spec!r}")
+    return item
+
+
+def _normalize_journal_items(items: list[dict]) -> list[dict]:
+    """Coerce account_id/id to int and ensure both debit & credit keys exist
+    (Akaunting validates ``items.*.debit`` and ``items.*.credit`` as required)."""
+    for it in items:
+        if it.get("account_id") is not None:
+            it["account_id"] = int(it["account_id"])
+        if it.get("id") is not None:
+            it["id"] = int(it["id"])
+        it.setdefault("debit", 0)
+        it.setdefault("credit", 0)
+    return items
+
+
+def _require_balanced(items: list[dict]) -> None:
+    """A journal entry needs >= 2 lines whose debits equal its credits."""
+    if len(items) < 2:
+        raise ValueError("a journal entry needs at least 2 line items")
+    debit = sum(float(it.get("debit") or 0) for it in items)
+    credit = sum(float(it.get("credit") or 0) for it in items)
+    if abs(debit - credit) > 1e-4:
+        raise ValueError(
+            f"journal entry does not balance: debits {debit:.2f} != credits {credit:.2f}"
+        )
+
+
+def _next_journal_number(client: Client) -> str:
+    pre = client.setting("double-entry.journal.number_prefix") or "MJE-"
+    digit = client.setting("double-entry.journal.number_digit")
+    try:
+        width = int(digit)
+    except (TypeError, ValueError):
+        width = 5
+    existing = client.list("journal-entry", all_pages=True)
+    maxn = 0
+    for row in existing:
+        tail = "".join(ch for ch in str(row.get("journal_number", "")) if ch.isdigit())
+        if tail:
+            maxn = max(maxn, int(tail))
+    return f"{pre}{maxn + 1:0{width}d}"
+
+
+def build_journal_create(res: Resource, client: Client, ns: Any) -> dict:
+    extra = load_data_arg(getattr(ns, "data", None))
+    items = [parse_journal_item(s) for s in (getattr(ns, "item", None) or [])]
+    if not items and "items" not in extra:
+        raise ValueError(
+            "at least two --item 'account_id=…,debit=…|credit=…' lines are "
+            "required (or supply --data with items)"
+        )
+
+    description = getattr(ns, "description", None)
+    if not description:
+        raise ValueError("--description is required to create a journal-entry")
+
+    body: dict[str, Any] = {
+        "paid_at": _normalize_date(getattr(ns, "paid_at", None) or today_dt()),
+        "journal_number": getattr(ns, "journal_number", None),
+        "description": description,
+        "basis": getattr(ns, "basis", None) or "accrual",
+        "currency_code": getattr(ns, "currency_code", None) or "USD",
+        "currency_rate": getattr(ns, "currency_rate", None) or 1,
+        # Akaunting recomputes the entry amount from the ledger debits; send 0.
+        "amount": 0,
+        "items": items,
+    }
+    if getattr(ns, "reference", None):
+        body["reference"] = ns.reference
+    body.update(parse_set(getattr(ns, "set_", None)))
+    body.update(extra)
+    if isinstance(body.get("items"), list):
+        _normalize_journal_items(body["items"])
+        _require_balanced(body["items"])
+    # Assign the journal number last — after client-side validation — so an
+    # invalid entry never burns a lookup (and the imbalance error surfaces
+    # without a network round-trip).
+    if not body.get("journal_number"):
+        body["journal_number"] = _next_journal_number(client)
+    return body
+
+
+def _journal_items_from_current(current: dict) -> list[dict]:
+    """Rebuild request items from a fetched entry's ledgers so an update that
+    doesn't touch lines doesn't delete them (UpdateJournalEntry deletes any
+    ledger whose id is absent from the request). Each line carries its ledger
+    ``id`` so the existing row is updated in place rather than recreated."""
+    out: list[dict] = []
+    for led in current.get("ledgers", {}).get("data", []):
+        row = {
+            "account_id": led.get("account_id"),
+            "debit": float(led.get("debit") or 0),
+            "credit": float(led.get("credit") or 0),
+        }
+        if led.get("id"):
+            row["id"] = int(led["id"])
+        out.append(row)
+    return out
+
+
+def build_journal_update(res: Resource, client: Client, ns: Any, current: dict) -> dict:
+    """Full update: Akaunting re-derives ledgers & amount from the request, so
+    resend the whole entry, overlaying any provided fields."""
+    body: dict[str, Any] = {
+        "paid_at": _normalize_dt_field(current.get("paid_at") or today_dt()),
+        "journal_number": current.get("journal_number"),
+        "description": current.get("description"),
+        "basis": current.get("basis") or "accrual",
+        "currency_code": current.get("currency_code"),
+        "currency_rate": current.get("currency_rate", 1),
+        "amount": 0,
+        "items": _journal_items_from_current(current),
+    }
+    if current.get("reference"):
+        body["reference"] = current["reference"]
+
+    for attr, key in [
+        ("paid_at", "paid_at"), ("journal_number", "journal_number"),
+        ("description", "description"), ("basis", "basis"),
+        ("currency_code", "currency_code"), ("currency_rate", "currency_rate"),
+        ("reference", "reference"),
+    ]:
+        v = getattr(ns, attr, None)
+        if v is not None:
+            body[key] = _normalize_date(v) if key == "paid_at" else v
+
+    items_specs = getattr(ns, "item", None) or []
+    if items_specs:
+        body["items"] = [parse_journal_item(s) for s in items_specs]
+
+    body.update(parse_set(getattr(ns, "set_", None)))
+    body.update(load_data_arg(getattr(ns, "data", None)))
+    if isinstance(body.get("items"), list):
+        _normalize_journal_items(body["items"])
+        _require_balanced(body["items"])
+    return body
+
+
+# --------------------------------------------------------------------------
+# chart-of-accounts (double-entry) — web-surface CRUD body builder
+# --------------------------------------------------------------------------
+
+def _apply_sub_account(body: dict) -> None:
+    """The web CRUD form carries an ``is_sub_account`` toggle; a parent
+    ``account_id`` is only honored when it's ``"true"`` and is cleared when
+    ``"false"``. Derive it from whether a parent was supplied."""
+    body["is_sub_account"] = "true" if body.get("account_id") else "false"
+
+
+def build_account_create(res: Resource, client: Client, ns: Any) -> dict:
+    body = body_from_fields(res, ns, for_update=False)
+    if not body.get("name"):
+        raise ValueError("--name is required to create a chart-of-account")
+    _apply_sub_account(body)
+    return body
+
+
+def build_account_update(res: Resource, client: Client, ns: Any, current: dict) -> dict:
+    # A full replace: Akaunting's Account request re-validates `name` on update,
+    # so backfill unspecified fields from the current record.
+    body = body_from_fields(res, ns, for_update=True, current=current)
+    _apply_sub_account(body)
+    return body

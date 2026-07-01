@@ -76,7 +76,7 @@ class Client:
             {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "User-Agent": "akt/0.2 (+akaunting-cli)",
+                "User-Agent": "akt/0.3 (+akaunting-cli)",
             }
         )
 
@@ -276,6 +276,62 @@ class Client:
                            f"Attachment media {media_id} not found or empty.")
         filename = self._disposition_filename(resp.headers.get("Content-Disposition", ""))
         return filename or f"attachment-{media_id}", resp.content
+
+    def _xsrf_header(self) -> dict:
+        """CSRF header for a session web request.
+
+        Laravel accepts the *encrypted* ``XSRF-TOKEN`` cookie value echoed back in
+        the ``X-XSRF-TOKEN`` header (it decrypts that to the session token) — this
+        is exactly what Akaunting's axios frontend does, and is far more robust
+        than scraping a per-page ``_token`` (Akaunting emits no ``csrf-token``
+        meta tag). ``requests`` already stores the cookie; we just surface it as a
+        header."""
+        cookie = self._session.cookies.get("XSRF-TOKEN")
+        return {"X-XSRF-TOKEN": unquote(cookie)} if cookie else {}
+
+    def web_json(self, method: str, path: str,
+                 form: "list[tuple[str, str]] | None" = None) -> Any:
+        """Call a session-authenticated web (non-``/api``) route that answers JSON.
+
+        Some module features are exposed only on the CSRF-protected web surface,
+        not the Basic-auth ``/api`` one — notably the Double-Entry
+        chart-of-accounts CRUD (``apiResource`` publishes it read-only). This logs
+        in a web session (cached for the process), attaches the CSRF token plus the
+        ``X-Requested-With``/``Accept`` headers Laravel needs to reply with JSON
+        instead of an HTML redirect, and unwraps Akaunting's
+        ``{success, error, data, message}`` AJAX envelope. ``path`` is relative to
+        ``{web_root}/{company_id}/``; use a real ``PATCH``/``DELETE`` method (the
+        resource controller and its FormRequest honor it directly)."""
+        self._web_login()
+        url = f"{self.config.web_root}/{self.config.company_id}/{path.lstrip('/')}"
+        headers = {
+            # Drop the JSON content-type so requests url-encodes the form itself.
+            "Content-Type": None,
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            **self._xsrf_header(),
+        }
+        resp = self._session.request(
+            method.upper(), url, data=list(form or []), headers=headers,
+            allow_redirects=False, timeout=self.timeout,
+        )
+        if self._waf_blocked(resp):
+            raise ApiError(resp.status_code, "Blocked by bot-protection on web route.")
+        if resp.status_code in (301, 302, 303, 307, 308):
+            raise ApiError(
+                resp.status_code,
+                "Web route redirected instead of returning JSON — the session "
+                "isn't authenticated or the CSRF token was rejected. Check the "
+                "admin credentials.",
+            )
+        payload = self._handle(resp)  # raises ApiError (with validation errors) on non-2xx
+        # Akaunting's AJAX envelope: a 200 can still carry a business-rule failure
+        # (e.g. deleting an account that has ledgers) as {success:false, error:true}.
+        if isinstance(payload, dict) and payload.get("error"):
+            raise ApiError(400, payload.get("message") or "Request failed")
+        if isinstance(payload, dict) and "data" in payload and "success" in payload:
+            return payload["data"]
+        return payload
 
     @staticmethod
     def _disposition_filename(disposition: str) -> str | None:

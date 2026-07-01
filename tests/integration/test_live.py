@@ -282,3 +282,97 @@ def test_bill_create_with_attachment(akt, tracker, tmp_path):
     out = tmp_path / "dl"
     saved = akt("bill", "download-attachment", str(bill["id"]), "--out", str(out))
     assert Path(saved[0]["path"]).read_bytes() == _PDF_BYTES
+
+
+# --------------------------------------------------------------------------
+# double-entry: chart of accounts (read) + journal entries (CRUD).
+# These need the DoubleEntry module installed; tests skip gracefully if not.
+# --------------------------------------------------------------------------
+
+def _chart_accounts(akt):
+    """Return the chart of accounts, or None if the module isn't installed."""
+    proc = akt("--json", "chart-of-account", "list", "--all", raw=True)
+    if proc.returncode != 0:
+        return None
+    import json
+    return json.loads(proc.stdout)
+
+
+def test_chart_of_account_read(akt):
+    accounts = _chart_accounts(akt)
+    if accounts is None:
+        pytest.skip("DoubleEntry module not installed (chart-of-accounts unavailable)")
+    if not accounts:
+        pytest.skip("chart of accounts is empty")
+    one = akt("chart-of-account", "get", str(accounts[0]["id"]))
+    assert one["id"] == accounts[0]["id"]
+    assert "code" in one and "name" in one
+
+
+def test_chart_of_account_crud(akt, tracker):
+    """create/update/delete run through the session/CSRF web route, not /api."""
+    accounts = _chart_accounts(akt)
+    if accounts is None:
+        pytest.skip("DoubleEntry module not installed (chart-of-accounts unavailable)")
+    if not accounts:
+        pytest.skip("chart of accounts is empty (need a type_id to reuse)")
+    type_id = accounts[0]["type_id"]
+    code = int(f"9{RID}"[:8])   # unlikely-to-collide numeric code
+
+    created = akt("chart-of-account", "create",
+                  "--name", f"AKT-IT Account {RID}", "--code", str(code),
+                  "--type-id", str(type_id))
+    tracker("chart-of-account", created["id"])
+    assert created["name"].endswith(RID)
+    assert int(created["code"]) == code
+
+    updated = akt("chart-of-account", "update", str(created["id"]),
+                  "--description", "AKT-IT updated")
+    assert updated["description"] == "AKT-IT updated"
+    assert updated["name"] == created["name"], "web update must preserve the name"
+
+    got = akt("chart-of-account", "get", str(created["id"]))
+    assert got["id"] == created["id"]
+
+
+def test_journal_entry_lifecycle(akt, tracker):
+    accounts = _chart_accounts(akt)
+    if accounts is None:
+        pytest.skip("DoubleEntry module not installed (journal-entry unavailable)")
+    if len(accounts) < 2:
+        pytest.skip("need at least two GL accounts to post a balanced entry")
+    debit_acct, credit_acct = accounts[0]["id"], accounts[1]["id"]
+
+    entry = akt(
+        "journal-entry", "create",
+        "--description", f"AKT-IT journal {RID}",
+        "--item", f"account_id={debit_acct},debit=100",
+        "--item", f"account_id={credit_acct},credit=100",
+    )
+    tracker("journal-entry", entry["id"])
+    assert _amount(entry) == 100, "entry amount is the summed debits"
+    assert entry["journal_number"], "a journal number should be auto-assigned"
+    ledgers = entry.get("ledgers", {}).get("data", [])
+    assert len(ledgers) == 2
+
+    got = akt("journal-entry", "get", str(entry["id"]))
+    assert got["id"] == entry["id"]
+
+    listed = akt("journal-entry", "list", "--all")
+    assert any(r["id"] == entry["id"] for r in listed)
+
+    # update a scalar field: the two ledger lines must survive (not be wiped)
+    updated = akt("journal-entry", "update", str(entry["id"]),
+                  "--description", f"AKT-IT journal {RID} revised")
+    assert updated["description"].endswith("revised")
+    assert len(updated.get("ledgers", {}).get("data", [])) == 2
+    assert _amount(updated) == 100
+
+
+def test_journal_entry_rejects_imbalance(akt):
+    """Client-side balance guard: an unbalanced entry never reaches the API."""
+    proc = akt("--json", "journal-entry", "create",
+               "--description", "AKT-IT bad", "--item", "account_id=1,debit=100",
+               "--item", "account_id=2,credit=90", raw=True)
+    assert proc.returncode != 0
+    assert "balance" in proc.stderr.lower()

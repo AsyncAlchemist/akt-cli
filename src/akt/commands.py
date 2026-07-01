@@ -43,6 +43,12 @@ def cmd_create(res: Resource, client: Client, ns: Any) -> int:
     # document goes to documents/{id}/transactions).
     endpoint = body.pop("__endpoint__", res.endpoint)
     type_scope = body.pop("__type_scope__", res.type_scope)
+    # Resources whose CRUD lives only on the session/CSRF web surface (e.g.
+    # chart-of-accounts) POST through client.web_json instead of /api.
+    if res.web_endpoint:
+        data = client.web_json("POST", res.web_endpoint, flatten_form(body))
+        emit(data, as_json=True)
+        return 0
     files = load_attachments(getattr(ns, "attachment", None))
     if files:
         payload = client.post_multipart(endpoint, flatten_form(body), files,
@@ -62,6 +68,12 @@ def cmd_update(res: Resource, client: Client, ns: Any) -> int:
         # PUT is a full replace in Akaunting, so merge changes onto the current
         # record to satisfy required-field validation.
         body = body_from_fields(res, ns, for_update=True, current=current)
+
+    # Web-surface CRUD resources (chart-of-accounts) update via the session route.
+    if res.web_endpoint:
+        data = client.web_json("PATCH", f"{res.web_endpoint}/{ns.id}", flatten_form(body))
+        emit(data, as_json=True)
+        return 0
 
     # A resolver may redirect to a nested route (a document-linked payment must
     # update via documents/{doc}/transactions/{id}; the flat route 400s on it).
@@ -97,6 +109,10 @@ def cmd_update(res: Resource, client: Client, ns: Any) -> int:
 
 
 def cmd_delete(res: Resource, client: Client, ns: Any) -> int:
+    if res.web_endpoint:
+        client.web_json("DELETE", f"{res.web_endpoint}/{ns.id}")
+        print(f"deleted {res.noun} {ns.id}")
+        return 0
     if res.delete_resolver:
         path, type_scope = res.delete_resolver(res, client, str(ns.id))
     else:
