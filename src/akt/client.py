@@ -14,8 +14,11 @@ Akaunting specifics baked in here:
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from typing import Any, Iterator
+from urllib.parse import unquote
 
 import requests
 
@@ -66,6 +69,7 @@ class Client:
         self._last_request = 0.0
         self._settings_cache: dict[str, Any] = {}
         self._settings_loaded = False
+        self._web_authed = False  # whether a web (session-cookie) login has run
         self._session = requests.Session()
         self._session.auth = (config.email, config.password)
         self._session.headers.update(
@@ -85,8 +89,21 @@ class Client:
         *,
         params: dict | None = None,
         json_body: Any = None,
+        form: Any = None,
+        files: Any = None,
         type_scope: str | None = None,
     ) -> Any:
+        """Perform an API request.
+
+        Bodies are mutually exclusive:
+          * ``json_body`` — serialized as JSON (the default surface).
+          * ``form`` + ``files`` — a multipart/form-data upload. ``form`` is an
+            iterable of ``(key, value)`` pairs (repeated keys allowed for
+            PHP-style ``attachment[]`` / ``items[0][name]`` encoding) and
+            ``files`` an iterable of ``(field, (filename, bytes, mime))``. The
+            hardcoded ``Content-Type: application/json`` session header is
+            dropped for these so ``requests`` sets the multipart boundary.
+        """
         url = f"{self.config.api_root}/{path.lstrip('/')}"
         query: dict[str, Any] = {"company_id": self.config.company_id}
         if type_scope:
@@ -102,8 +119,15 @@ class Client:
                     continue  # already merged
                 query[k] = v
 
+        multipart = files is not None or form is not None
         data = None
-        if json_body is not None:
+        headers = None
+        if multipart:
+            data = list(form or [])
+            # Drop the JSON content-type so requests builds the multipart body
+            # (with its boundary) itself.
+            headers = {"Content-Type": None}
+        elif json_body is not None:
             data = json.dumps(json_body)
 
         attempt = 0
@@ -118,6 +142,8 @@ class Client:
                 url,
                 params=query,
                 data=data,
+                files=files,
+                headers=headers,
                 timeout=self.timeout,
             )
             if attempt < self.max_retries and _is_transient(resp):
@@ -173,6 +199,99 @@ class Client:
 
     def delete(self, path: str, **kw) -> Any:
         return self.request("DELETE", path, **kw)
+
+    def post_multipart(self, path: str, form: Any, files: Any, **kw) -> Any:
+        """Create a record with a multipart body (e.g. carrying attachments)."""
+        return self.request("POST", path, form=form, files=files, **kw)
+
+    def put_multipart(self, path: str, form: Any, files: Any, **kw) -> Any:
+        """Update an existing record with a multipart body.
+
+        PHP does not populate ``$_FILES`` for a real PUT, so multipart updates
+        are sent as POST with a spoofed ``_method=PATCH`` field (the same trick
+        the Akaunting web UI uses)."""
+        form = [("_method", "PATCH"), *form]
+        return self.request("POST", path, form=form, files=files, **kw)
+
+    # ---- attachment download (web-session surface) --------------------
+
+    def _web_login(self) -> None:
+        """Authenticate a browser-style session for the ``/uploads`` routes.
+
+        Attachment bytes are only served by ``GET /{company}/uploads/{id}/download``
+        behind the web ``auth`` guard — the ``/api`` Basic-auth surface exposes
+        attachment *metadata* but not the file. So we log in the same way the web
+        UI does (scrape the login form's CSRF ``_token``, POST credentials) and
+        reuse the resulting session cookie."""
+        if self._web_authed:
+            return
+        login_url = f"{self.config.web_root}/auth/login"
+        # No JSON content-type on these calls: the login form is url-encoded and
+        # the pages are HTML.
+        resp = self._session.get(login_url, headers={"Content-Type": None},
+                                 timeout=self.timeout)
+        if self._waf_blocked(resp):
+            raise ApiError(resp.status_code, "Blocked by bot-protection during web login.")
+        token = self._csrf_token(resp.text)
+        if not token:
+            raise ApiError(resp.status_code,
+                           "Could not find a login CSRF token; web login failed.")
+        post = self._session.post(
+            login_url,
+            data={"_token": token, "email": self.config.email,
+                  "password": self.config.password, "remember": "on"},
+            headers={"Content-Type": None},
+            allow_redirects=True,
+            timeout=self.timeout,
+        )
+        if self._waf_blocked(post):
+            raise ApiError(post.status_code, "Blocked by bot-protection during web login.")
+        self._web_authed = True
+
+    def _csrf_token(self, html: str) -> str | None:
+        m = re.search(r'name="_token"[^>]*value="([^"]+)"', html)
+        if m:
+            return m.group(1)
+        m = re.search(r'name="csrf-token"\s+content="([^"]+)"', html)
+        if m:
+            return m.group(1)
+        # Fall back to the XSRF-TOKEN cookie (Laravel accepts it as the token).
+        cookie = self._session.cookies.get("XSRF-TOKEN")
+        return unquote(cookie) if cookie else None
+
+    def download_media(self, media_id: int | str) -> "tuple[str, bytes]":
+        """Return ``(filename, content)`` for an attachment media id.
+
+        Logs in a web session on first use (cached for the process)."""
+        self._web_login()
+        url = f"{self.config.web_root}/{self.config.company_id}/uploads/{media_id}/download"
+        resp = self._session.get(url, headers={"Content-Type": None},
+                                 allow_redirects=False, timeout=self.timeout)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            raise ApiError(resp.status_code,
+                           "Attachment download redirected (web session not "
+                           "authenticated). Check the admin credentials.")
+        if not resp.ok or not resp.content:
+            raise ApiError(resp.status_code,
+                           f"Attachment media {media_id} not found or empty.")
+        filename = self._disposition_filename(resp.headers.get("Content-Disposition", ""))
+        return filename or f"attachment-{media_id}", resp.content
+
+    @staticmethod
+    def _disposition_filename(disposition: str) -> str | None:
+        name = None
+        m = re.search(r"filename\*=(?:UTF-8'')?([^;]+)", disposition, re.IGNORECASE)
+        if m:
+            name = unquote(m.group(1).strip().strip('"'))
+        else:
+            m = re.search(r'filename="?([^";]+)"?', disposition, re.IGNORECASE)
+            if m:
+                name = m.group(1).strip()
+        if not name:
+            return None
+        # Defense-in-depth: a server-supplied name must never carry a path.
+        name = os.path.basename(name.replace("\\", "/"))
+        return name or None
 
     # ---- higher level helpers -----------------------------------------
 

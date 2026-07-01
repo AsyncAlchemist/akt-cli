@@ -9,10 +9,14 @@ identifiable and avoid collisions with prior runs.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.integration
+
+# A minimal but valid PDF so Akaunting's mime validation (pdf/jpg/png) accepts it.
+_PDF_BYTES = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
 
 # Per-run token (tests run in one process) to keep unique numbers/codes distinct.
 RID = str(int(time.time()))[-6:]
@@ -188,3 +192,93 @@ def test_invoice_flow(akt, tracker):
 
     paid = akt("invoice", "get", str(invoice["id"]))
     assert paid["status"] == "paid"
+
+
+# --------------------------------------------------------------------------
+# attachments: upload to an existing transaction, list, download, remove
+# --------------------------------------------------------------------------
+
+def _attachment_ids(record) -> list:
+    att = record.get("attachment")
+    return [m["id"] for m in att] if isinstance(att, list) else []
+
+
+def test_payment_attachment_lifecycle(akt, tracker, tmp_path):
+    pdf = tmp_path / "receipt.pdf"
+    pdf.write_bytes(_PDF_BYTES)
+
+    # a standalone transaction that starts with no attachment
+    pay = akt("payment", "create", "--type", "expense", "--amount", "12.50",
+              "--description", f"AKT-IT attach {RID}")
+    tracker("payment", pay["id"])
+    assert not _attachment_ids(pay)
+
+    # attach to the EXISTING transaction (payment update -> multipart)
+    updated = akt("payment", "update", str(pay["id"]), "--attachment", str(pdf))
+    ids = _attachment_ids(updated)
+    assert len(ids) == 1, "attachment should be present after update"
+
+    # list surfaces the media metadata
+    listed = akt("payment", "attachments", str(pay["id"]))
+    assert [r["id"] for r in listed] == ids
+    assert listed[0]["name"].endswith(".pdf")
+
+    # download it back and verify byte-for-byte
+    out = tmp_path / "dl"
+    saved = akt("payment", "download-attachment", str(pay["id"]), "--out", str(out))
+    assert len(saved) == 1
+    got = Path(saved[0]["path"]).read_bytes()
+    assert got == _PDF_BYTES, "downloaded bytes must match the uploaded file"
+
+    # remove the attachment — assert via a FRESH fetch, not the update response
+    # (Akaunting serializes a cached attachment relation on the PUT response).
+    akt("payment", "update", str(pay["id"]), "--remove-attachment")
+    assert akt("payment", "attachments", str(pay["id"])) == [], \
+        "attachment should be gone after --remove-attachment"
+
+
+def test_document_linked_payment_attachment(akt, tracker, tmp_path):
+    """The tricky case: a bill/invoice payment routes through the nested
+    documents/{doc}/transactions/{id} endpoint, whose update job takes a single
+    `attachment` (not the `attachment[]` array every other route wants)."""
+    pdf = tmp_path / "paid.pdf"
+    pdf.write_bytes(_PDF_BYTES)
+
+    vendor = akt("vendor", "create", "--name", f"AKT-IT DocPayVendor {RID}", "--currency-code", "USD")
+    tracker("vendor", vendor["id"])
+    bill = akt("bill", "create", "--contact", str(vendor["id"]),
+               "--item", "name=Widget,price=100,quantity=1", "--status", "received")
+    tracker("bill", bill["id"])
+    pay = akt("payment", "create", "--bill", str(bill["id"]))
+    tracker("payment", pay["id"])
+
+    # attach to the EXISTING document-linked payment (nested-route multipart)
+    updated = akt("payment", "update", str(pay["id"]), "--attachment", str(pdf))
+    assert updated.get("document_id"), "payment should still be linked to its bill"
+    assert len(_attachment_ids(updated)) == 1
+
+    saved = akt("payment", "download-attachment", str(pay["id"]), "--out", str(tmp_path / "dl"))
+    assert Path(saved[0]["path"]).read_bytes() == _PDF_BYTES
+
+    akt("payment", "update", str(pay["id"]), "--remove-attachment")
+    assert akt("payment", "attachments", str(pay["id"])) == []
+
+
+def test_bill_create_with_attachment(akt, tracker, tmp_path):
+    pdf = tmp_path / "supplier-bill.pdf"
+    pdf.write_bytes(_PDF_BYTES)
+
+    vendor = akt("vendor", "create", "--name", f"AKT-IT AttVendor {RID}", "--currency-code", "USD")
+    tracker("vendor", vendor["id"])
+
+    # attachment supplied at create time on a document (multipart with nested items)
+    bill = akt("bill", "create", "--contact", str(vendor["id"]),
+               "--item", "name=Widget,price=100,quantity=2", "--status", "received",
+               "--attachment", str(pdf))
+    tracker("bill", bill["id"])
+    assert _amount(bill) == 200, "line-item total must survive the multipart encoding"
+    assert len(_attachment_ids(bill)) == 1
+
+    out = tmp_path / "dl"
+    saved = akt("bill", "download-attachment", str(bill["id"]), "--out", str(out))
+    assert Path(saved[0]["path"]).read_bytes() == _PDF_BYTES

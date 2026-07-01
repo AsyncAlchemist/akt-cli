@@ -9,8 +9,10 @@ from typing import Any
 from .client import ApiError, Client
 from .config import ConfigError, load_config
 from .commands import (
+    cmd_attachments,
     cmd_create,
     cmd_delete,
+    cmd_download_attachment,
     cmd_get,
     cmd_list,
     cmd_toggle,
@@ -38,6 +40,14 @@ def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bo
     if res.endpoint == "documents":
         p.add_argument("--item", action="append", metavar="K=V,...",
                        help="line item, e.g. 'name=Widget,price=10,quantity=2,tax_id=1' (repeatable)")
+    if res.supports_attachments:
+        p.add_argument("--attachment", action="append", metavar="PATH",
+                       help="attach a file (pdf/jpg/png, repeatable); switches the "
+                            "request to multipart upload")
+        if for_update:
+            p.add_argument("--remove-attachment", dest="remove_attachment",
+                           action="store_true",
+                           help="clear existing attachment(s) on this record")
     p.add_argument("--set", dest="set_", action="append", metavar="KEY=VALUE",
                    help="set an arbitrary body field (repeatable; value JSON-coerced)")
     p.add_argument("--data", metavar="JSON|@FILE",
@@ -99,6 +109,20 @@ def _build_parser() -> argparse.ArgumentParser:
         dp = verbs.add_parser("delete", parents=[common], help=f"Delete a {res.noun}")
         dp.add_argument("id")
         dp.set_defaults(_handler=lambda res, c, ns: cmd_delete(res, c, ns))
+
+        if res.supports_attachments:
+            ap = verbs.add_parser("attachments", parents=[common],
+                                  help=f"List attachments on a {res.noun}")
+            ap.add_argument("id")
+            ap.set_defaults(_handler=lambda res, c, ns: cmd_attachments(res, c, ns))
+
+            dap = verbs.add_parser("download-attachment", parents=[common],
+                                   help=f"Download attachment(s) from a {res.noun}")
+            dap.add_argument("id")
+            dap.add_argument("--out", metavar="DIR", help="output directory (default .)")
+            dap.add_argument("--media-id", metavar="ID",
+                             help="download only this media id (default: all)")
+            dap.set_defaults(_handler=lambda res, c, ns: cmd_download_attachment(res, c, ns))
 
         if res.supports_toggle:
             ep = verbs.add_parser("enable", parents=[common], help=f"Enable a {res.noun}")

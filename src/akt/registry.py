@@ -10,6 +10,7 @@ from .resources import (
     build_payment_create,
     build_transfer_create,
     resolve_payment_delete,
+    resolve_payment_update,
 )
 
 # Common column sets
@@ -189,6 +190,7 @@ INVOICE = Resource(
     columns=_DOC_COLS,
     build_create=build_document_create,
     build_update=build_document_update,
+    supports_attachments=True,
     help="Sales invoices",
 )
 
@@ -201,6 +203,7 @@ BILL = Resource(
     columns=_DOC_COLS,
     build_create=build_document_create,
     build_update=build_document_update,
+    supports_attachments=True,
     help="Purchase bills",
 )
 
@@ -228,8 +231,10 @@ PAYMENT = Resource(
     ],
     columns=_TXN_COLS,
     supports_toggle=False,
+    supports_attachments=True,
     build_create=build_payment_create,
     delete_resolver=resolve_payment_delete,
+    update_resolver=resolve_payment_update,
     help="Payments / transactions (income & expense)",
 )
 

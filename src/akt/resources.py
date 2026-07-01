@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import mimetypes
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -50,6 +52,7 @@ class Resource:
     columns: list[tuple[str, str]] = field(default_factory=list)  # (header, dotted path)
     search_default: str | None = None      # always-applied search filter
     supports_toggle: bool = True           # enable/disable verbs
+    supports_attachments: bool = False     # --attachment upload + attachments/download verbs
     help: str = ""
 
     # hooks (override for documents/payments)
@@ -57,6 +60,9 @@ class Resource:
     build_update: Callable[["Resource", Client, Any, dict], dict] | None = None
     # returns (path, type_scope) for delete; lets payments use the nested route
     delete_resolver: Callable[["Resource", Client, str], "tuple[str, str | None]"] | None = None
+    # returns (path, type_scope) for update; lets document-linked payments use
+    # the nested route (the flat /transactions route 400s on any document_id)
+    update_resolver: Callable[["Resource", Client, str, dict], "tuple[str, str | None]"] | None = None
 
     def contact_scope(self) -> str:
         """ACL scope of the contact tied to a document resource."""
@@ -93,6 +99,73 @@ def load_data_arg(value: str | None) -> dict:
         with open(value[1:]) as fh:
             return json.load(fh)
     return json.loads(value)
+
+
+# --------------------------------------------------------------------------
+# multipart / attachment helpers
+# --------------------------------------------------------------------------
+
+# Mirror Akaunting's default config('filesystems.mimes') so we can give a clear
+# client-side error instead of a generic 422. Overridable server-side via
+# FILESYSTEM_MIMES, but pdf/jpeg/jpg/png is the stock allow-list.
+_DEFAULT_ATTACHMENT_EXTS = {"pdf", "jpeg", "jpg", "png"}
+
+
+def flatten_form(body: dict, *, exclude: tuple[str, ...] = ()) -> list[tuple[str, str]]:
+    """Flatten a nested JSON body into PHP-style multipart form pairs.
+
+    ``{"items": [{"name": "W", "tax_id": [1, 2]}]}`` becomes
+    ``[("items[0][name]", "W"), ("items[0][tax_id][0]", "1"), ...]`` so a
+    multipart upload carries the same structure the JSON surface would. Keys in
+    ``exclude`` (and any reserved ``__…__`` routing keys) are skipped. ``None``
+    values and booleans are coerced the way the API expects (``1``/``0``)."""
+    out: list[tuple[str, str]] = []
+
+    def emit(key: str, value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, bool):
+            out.append((key, "1" if value else "0"))
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                emit(f"{key}[{k}]", v)
+        elif isinstance(value, (list, tuple)):
+            for i, v in enumerate(value):
+                emit(f"{key}[{i}]", v)
+        else:
+            out.append((key, str(value)))
+
+    for k, v in body.items():
+        if k in exclude or (k.startswith("__") and k.endswith("__")):
+            continue
+        emit(k, v)
+    return out
+
+
+def load_attachments(paths: list[str] | None, *, field: str = "attachment[]"
+                     ) -> list[tuple[str, tuple[str, bytes, str]]]:
+    """Read each ``--attachment`` path into a requests ``files`` tuple.
+
+    ``field`` is the multipart key. Almost every Akaunting route loops over the
+    array field ``attachment[]``; the sole exception is the nested transaction
+    *update* job (``UpdateBankingDocumentTransaction``), which reads a single
+    ``attachment`` file and crashes on an array — callers pass ``field="attachment"``
+    for that route."""
+    files: list[tuple[str, tuple[str, bytes, str]]] = []
+    for path in paths or []:
+        if not os.path.isfile(path):
+            raise ValueError(f"attachment not found: {path}")
+        ext = os.path.splitext(path)[1].lstrip(".").lower()
+        if ext not in _DEFAULT_ATTACHMENT_EXTS:
+            raise ValueError(
+                f"attachment {path!r}: extension {ext!r} not allowed "
+                f"(default allowed: {', '.join(sorted(_DEFAULT_ATTACHMENT_EXTS))})"
+            )
+        with open(path, "rb") as fh:
+            content = fh.read()
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        files.append((field, (os.path.basename(path), content, mime)))
+    return files
 
 
 def now_dt() -> str:
@@ -440,6 +513,19 @@ def resolve_payment_delete(res: Resource, client: Client, ident: str) -> "tuple[
     doc_id = txn.get("document_id")
     if doc_id:
         scope = "invoice" if txn.get("type") == "income" else "bill"
+        return f"documents/{doc_id}/transactions/{ident}", scope
+    return f"transactions/{ident}", None
+
+
+def resolve_payment_update(res: Resource, client: Client, ident: str,
+                           current: dict) -> "tuple[str, str | None]":
+    """A payment linked to a document must be updated via the nested route
+    PUT /documents/{doc}/transactions/{id}; the flat /transactions route 400s on
+    any request carrying document_id. Mirrors :func:`resolve_payment_delete` but
+    reuses the already-fetched ``current`` record to avoid a second GET."""
+    doc_id = current.get("document_id")
+    if doc_id:
+        scope = "invoice" if current.get("type") == "income" else "bill"
         return f"documents/{doc_id}/transactions/{ident}", scope
     return f"transactions/{ident}", None
 

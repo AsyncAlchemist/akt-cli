@@ -60,6 +60,16 @@ class Config:
             return base
         return base + "/api"
 
+    @property
+    def web_root(self) -> str:
+        """The web (non-API) origin, used for the session-authenticated upload
+        download route ``/{company}/uploads/{id}/download`` which lives outside
+        the ``/api`` surface."""
+        base = self.base_url.rstrip("/")
+        if base.endswith("/api"):
+            base = base[: -len("/api")]
+        return base.rstrip("/")
+
 
 def load_config(
     *,

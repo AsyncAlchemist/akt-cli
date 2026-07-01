@@ -19,6 +19,9 @@ from akt.resources import (
     build_document_update,
     build_payment_create,
     resolve_payment_delete,
+    resolve_payment_update,
+    flatten_form,
+    load_attachments,
     body_from_fields,
 )
 from akt.cli import _build_parser
@@ -307,3 +310,87 @@ def test_json_flag_works_after_verb():
     parser = _build_parser()
     ns = parser.parse_args(["customer", "list", "--json"])
     assert getattr(ns, "json", False) is True
+
+
+# --------------------------------------------------------------------------
+# attachments: multipart form flattening, file loading, update routing
+# --------------------------------------------------------------------------
+
+def test_flatten_form_nested_items_and_taxes():
+    body = {
+        "type": "invoice",
+        "amount": 0,
+        "items": [
+            {"name": "Widget", "price": 10, "tax_id": [1, 2]},
+            {"name": "Setup", "price": 500},
+        ],
+    }
+    pairs = dict(flatten_form(body))
+    assert pairs["type"] == "invoice"
+    assert pairs["amount"] == "0"
+    assert pairs["items[0][name]"] == "Widget"
+    assert pairs["items[0][price]"] == "10"
+    assert pairs["items[0][tax_id][0]"] == "1"
+    assert pairs["items[0][tax_id][1]"] == "2"
+    assert pairs["items[1][name]"] == "Setup"
+
+
+def test_flatten_form_skips_none_and_reserved_and_coerces_bool():
+    body = {"name": "Acme", "email": None, "enabled": True, "disabled": False,
+            "__endpoint__": "documents/3/transactions", "__type_scope__": "invoice"}
+    pairs = dict(flatten_form(body))
+    assert pairs == {"name": "Acme", "enabled": "1", "disabled": "0"}
+    assert "email" not in pairs          # None dropped
+    assert not any(k.startswith("__") for k in pairs)  # routing keys dropped
+
+
+def test_load_attachments_reads_validates_and_rejects(tmp_path):
+    pdf = tmp_path / "receipt.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    files = load_attachments([str(pdf)])
+    assert len(files) == 1
+    field, (name, content, mime) = files[0]
+    assert field == "attachment[]"       # the array field both surfaces expect
+    assert name == "receipt.pdf"
+    assert content == b"%PDF-1.4 test"
+    assert mime == "application/pdf"
+
+    bad = tmp_path / "note.txt"
+    bad.write_text("nope")
+    with pytest.raises(ValueError):      # disallowed extension
+        load_attachments([str(bad)])
+    with pytest.raises(ValueError):      # missing file
+        load_attachments([str(tmp_path / "ghost.pdf")])
+
+
+def test_load_attachments_empty_is_noop():
+    assert load_attachments(None) == []
+    assert load_attachments([]) == []
+
+
+def test_resolve_payment_update_uses_nested_route_for_document_payment():
+    """A document-linked payment must update via documents/{doc}/transactions/{id};
+    the flat /transactions route 400s on any request carrying document_id."""
+    linked = {"id": 16, "type": "expense", "document_id": 7}
+    assert resolve_payment_update(PAYMENT, FakeClient(), "16", linked) == (
+        "documents/7/transactions/16", "bill")
+    income = {"id": 20, "type": "income", "document_id": 3}
+    assert resolve_payment_update(PAYMENT, FakeClient(), "20", income) == (
+        "documents/3/transactions/20", "invoice")
+
+
+def test_resolve_payment_update_uses_flat_route_for_standalone():
+    standalone = {"id": 2, "type": "income", "document_id": None}
+    assert resolve_payment_update(PAYMENT, FakeClient(), "2", standalone) == (
+        "transactions/2", None)
+
+
+def test_load_attachments_single_field_for_nested_route(tmp_path):
+    """The nested transaction-update route reads a single `attachment` file;
+    everything else uses the `attachment[]` array."""
+    pdf = tmp_path / "r.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    arr = load_attachments([str(pdf)])
+    assert arr[0][0] == "attachment[]"
+    single = load_attachments([str(pdf)], field="attachment")
+    assert single[0][0] == "attachment"

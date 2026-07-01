@@ -100,6 +100,17 @@ akt <noun> enable <id>      # where applicable
 akt <noun> disable <id>
 ```
 
+Bills, invoices and payments additionally support **attachments** (scanned bills,
+receipts, PDFs):
+
+```
+akt <noun> create ... --attachment ./file.pdf        # repeatable; upload on create
+akt <noun> update <id> --attachment ./file.pdf       # attach to an existing record
+akt <noun> update <id> --remove-attachment           # clear existing attachment(s)
+akt <noun> attachments <id>                           # list attached files (id, name, size)
+akt <noun> download-attachment <id> [--out DIR] [--media-id ID]
+```
+
 Output is a table by default; add `--json` (works before or after the verb) for
 raw JSON suitable for piping into `jq`.
 
@@ -141,6 +152,14 @@ akt payment create --invoice 34 --amount 750 \
 akt bill create --contact 13 --item 'name=Paper,price=40,quantity=5'
 akt payment create --bill 41
 
+# Attachments: upload the source PDF/scan and fetch it back later
+akt bill create --contact 13 --item 'name=Paper,price=40,quantity=5' \
+    --attachment ./supplier-bill.pdf
+akt payment update 57 --attachment ./receipt.pdf   # attach to an existing payment
+akt bill attachments 41                             # list attached files
+akt bill download-attachment 41 --out ./downloads   # save to disk
+akt payment update 57 --remove-attachment           # clear attachments
+
 # Anything else: raw API access
 akt raw GET reports
 akt raw POST items --data '{"name":"Ad-hoc","type":"service","sale_price":99}'
@@ -164,6 +183,16 @@ Driving Akaunting's API directly has sharp edges; `akt` papers over these:
   so they aren't lost.
 * **Nested payment route** — paying a document must POST to
   `documents/{id}/transactions`; the flat `transactions` endpoint rejects it.
+  The same applies to *updating* a document-linked payment (e.g. attaching a
+  file to it) — `akt` picks the nested route automatically.
+* **Multipart uploads** — attachments switch the request from JSON to
+  `multipart/form-data` with the `attachment[]` field; updates are sent as
+  `POST` + `_method=PATCH` because PHP won't populate `$_FILES` on a real `PUT`.
+* **Attachment download isn't on `/api`** — Akaunting only serves attachment
+  bytes from the session-authenticated web route `/{company}/uploads/{id}/download`.
+  `akt download-attachment` transparently logs in a web session with your admin
+  credentials (reused for the process) to fetch the file; metadata (id, name,
+  size) comes from the `/api` record itself.
 * **Full-replace updates** — Akaunting PUT re-validates required fields, so
   `akt` merges your changes onto the current record.
 
