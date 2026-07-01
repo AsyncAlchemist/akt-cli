@@ -314,9 +314,13 @@ def test_chart_of_account_crud(akt, tracker):
     accounts = _chart_accounts(akt)
     if accounts is None:
         pytest.skip("DoubleEntry module not installed (chart-of-accounts unavailable)")
-    if not accounts:
-        pytest.skip("chart of accounts is empty (need a type_id to reuse)")
-    type_id = accounts[0]["type_id"]
+    # Reuse an existing account's type, but avoid bank-type accounts (module
+    # default type id 6): those spawn a linked banking account, which makes them
+    # undeletable ("has account related") and would break teardown.
+    reusable = [a for a in accounts if str(a.get("type_id")) != "6"]
+    if not reusable:
+        pytest.skip("no non-bank GL account type available to reuse")
+    type_id = reusable[0]["type_id"]
     code = int(f"9{RID}"[:8])   # unlikely-to-collide numeric code
 
     created = akt("chart-of-account", "create",
