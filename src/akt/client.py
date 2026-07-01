@@ -76,7 +76,7 @@ class Client:
             {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "User-Agent": "akt/0.1 (+akaunting-cli)",
+                "User-Agent": "akt/0.2 (+akaunting-cli)",
             }
         )
 

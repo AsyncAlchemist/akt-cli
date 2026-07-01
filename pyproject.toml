@@ -1,6 +1,6 @@
 [project]
 name = "akt-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "akt — a CLI toolbox to fully drive an Akaunting accounting instance"
 readme = "README.md"
 license = "MIT"
