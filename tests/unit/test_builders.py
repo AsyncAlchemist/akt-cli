@@ -46,6 +46,11 @@ class FakeClient:
         self._txns_list = txns_list or []
         self._transactions = transactions or {}
         self._journals_list = journals_list or []
+        self.puts = []                       # recorded (path, body) PUT calls
+
+    def put(self, path, json_body, **kw):
+        self.puts.append((path, json_body))
+        return {"data": json_body}
 
     def show(self, path, ident, *, type_scope=None):
         ident = str(ident)
@@ -373,6 +378,51 @@ def test_build_journal_update_preserves_ledgers_with_ids():
         {"account_id": 10, "debit": 100.0, "credit": 0.0, "id": 5},
         {"account_id": 20, "debit": 0.0, "credit": 100.0, "id": 6},
     ]
+
+
+def test_redate_opening_balance_puts_new_date_and_backfills_number():
+    from akt.resources import redate_opening_balance
+    client = FakeClient(
+        settings={"double-entry.journal.number_prefix": "MJE-",
+                  "double-entry.journal.number_digit": "5"},
+        journals_list=[
+            {"id": 42, "reference": "opening-balance:14",
+             "description": "Opening Balance;Checking", "journal_number": None,
+             "basis": "accrual", "currency_code": "USD", "currency_rate": 1,
+             "created_at": "2026-07-12T10:00:00+00:00",
+             "ledgers": {"data": [
+                 {"id": 5, "account_id": 14, "debit": 500, "credit": None},
+                 {"id": 6, "account_id": 30, "debit": None, "credit": 500},
+             ]}},
+        ],
+    )
+    ns = SimpleNamespace(opening_balance_date="2024-12-31")
+    record = {"id": 7, "name": "Checking"}
+    redate_opening_balance(BY_NOUN["bank"], client, record, ns)
+    assert len(client.puts) == 1
+    path, body = client.puts[0]
+    assert path == "journal-entry/42"
+    assert body["paid_at"] == "2024-12-31 00:00:00"       # normalized
+    assert body["journal_number"] == "MJE-00001"          # backfilled (list has no numbers)
+    assert body["reference"] == "opening-balance:14"
+    assert len(body["items"]) == 2
+
+
+def test_redate_opening_balance_noop_without_date():
+    from akt.resources import redate_opening_balance
+    client = FakeClient(journals_list=[])
+    ns = SimpleNamespace(opening_balance_date=None)
+    redate_opening_balance(BY_NOUN["bank"], client, {"id": 7, "name": "Checking"}, ns)
+    assert client.puts == []
+
+
+def test_redate_opening_balance_warns_when_no_je(capsys):
+    from akt.resources import redate_opening_balance
+    client = FakeClient(journals_list=[])                 # nothing to find
+    ns = SimpleNamespace(opening_balance_date="2024-12-31")
+    redate_opening_balance(BY_NOUN["bank"], client, {"id": 7, "name": "Checking"}, ns)
+    assert client.puts == []
+    assert "no opening-balance journal entry" in capsys.readouterr().err
 
 
 def test_journal_reput_body_preserves_ledgers_and_sets_date():
