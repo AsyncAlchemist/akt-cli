@@ -379,3 +379,116 @@ def test_apply_prune_disables_via_toggle_routes():
     assert ("web_json", "GET", "double-entry/chart-of-accounts/9/disable", {}) in client.calls
     assert ("get", "categories/20/disable") in client.calls
     assert summary["accounts_disabled"] == 1 and summary["categories_disabled"] == 1
+
+
+from types import SimpleNamespace
+from akt.coa import resolve_coding
+from akt.registry import PAYMENT
+from akt.resources import build_payment_create
+
+
+class CoaFakeClient:
+    def __init__(self, accounts, categories, settings=None):
+        self._accounts = accounts
+        self._categories = categories
+        self._settings = settings or {}
+
+    def list(self, path, **kw):
+        if path == "chart-of-accounts":
+            return self._accounts
+        if path == "categories":
+            return self._categories
+        return []
+
+    def setting(self, key, default=None):
+        return self._settings.get(key, default)
+
+    def show(self, path, ident, **kw):
+        raise KeyError(path)
+
+
+_LIVE_ACCOUNTS = [
+    {"id": 47, "code": 400, "name": "API Subscription Revenue", "type_id": 13},
+    {"id": 61, "code": 628, "name": "Other / Uncategorized", "type_id": 12},
+]
+_LIVE_CATEGORIES = [
+    {"id": 10, "name": "API Subscription Revenue", "type": "income"},
+    {"id": 11, "name": "Other / Uncategorized", "type": "expense"},
+]
+
+
+def test_resolve_by_account_code():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    de_id, cat_id = resolve_coding(_cfg(), client, account_ref="400", category_ref=None)
+    assert (de_id, cat_id) == (47, 10)
+
+
+def test_resolve_by_account_name():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    de_id, cat_id = resolve_coding(_cfg(), client,
+                                   account_ref="Other / Uncategorized", category_ref=None)
+    assert (de_id, cat_id) == (61, 11)
+
+
+def test_resolve_by_category_name():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    de_id, cat_id = resolve_coding(_cfg(), client, account_ref=None,
+                                   category_ref="API Subscription Revenue")
+    assert (de_id, cat_id) == (47, 10)
+
+
+def test_resolve_conflicting_account_and_category_errors():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    with pytest.raises(ValueError, match="disagree"):
+        resolve_coding(_cfg(), client, account_ref="400",
+                       category_ref="Other / Uncategorized")
+
+
+def test_resolve_unknown_ref_errors():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    with pytest.raises(ValueError, match="not in the COA config"):
+        resolve_coding(_cfg(), client, account_ref="777", category_ref=None)
+
+
+def test_resolve_account_not_synced_errors():
+    # config has 310 Owners Draw but it isn't live yet
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    with pytest.raises(ValueError, match="coa sync"):
+        resolve_coding(_cfg(), client, account_ref="310", category_ref=None)
+
+
+def _payment_ns(**over):
+    base = dict(invoice=None, bill=None, type="income", document_id=None,
+                contact_id=None, category_id=None, amount=1.0, account_id=1,
+                paid_at="2026-07-12", currency_code=None, currency_rate=None,
+                payment_method=None, number="TXN-1", reference=None,
+                description="x", account=None, category=None, set_=None, data=None)
+    base.update(over)
+    ns = SimpleNamespace(**base)
+    ns._coa = _cfg()
+    return ns
+
+
+def test_payment_create_autofills_both_sides_from_account():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.account": "1"})
+    body = build_payment_create(PAYMENT, client, _payment_ns(account="400"))
+    assert body["de_account_id"] == 47
+    assert body["category_id"] == 10
+
+
+def test_payment_create_explicit_set_de_account_wins():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.account": "1"})
+    body = build_payment_create(PAYMENT, client,
+                                _payment_ns(account="400", set_=["de_account_id=99"]))
+    assert body["de_account_id"] == 99          # explicit --set overrides
+    assert body["category_id"] == 10
+
+
+def test_payment_create_no_coa_flag_is_legacy():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.income_category": "2", "default.account": "1"})
+    body = build_payment_create(PAYMENT, client, _payment_ns(category_id=2))
+    assert "de_account_id" not in body          # untouched
+    assert body["category_id"] == 2

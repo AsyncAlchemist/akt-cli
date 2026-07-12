@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .client import Client
+from .coa import resolve_coding
 
 
 # --------------------------------------------------------------------------
@@ -436,6 +437,14 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
     contact_id = getattr(ns, "contact_id", None)
     category_id = getattr(ns, "category_id", None)
 
+    coa = getattr(ns, "_coa", None)
+    account_ref = getattr(ns, "account", None)
+    category_ref = getattr(ns, "category", None)
+    de_account_id = None
+    if coa is not None and (account_ref or category_ref):
+        de_account_id, category_id = resolve_coding(
+            coa, client, account_ref=account_ref, category_ref=category_ref)
+
     if invoice_id:
         document = client.show("documents", invoice_id, type_scope="invoice")
         ptype = ptype or "income"
@@ -492,6 +501,8 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
         body["reference"] = ns.reference
     if getattr(ns, "description", None):
         body["description"] = ns.description
+    if de_account_id is not None:
+        body["de_account_id"] = de_account_id
     body.update(parse_set(getattr(ns, "set_", None)))
     body.update(load_data_arg(getattr(ns, "data", None)))
 
