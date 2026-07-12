@@ -456,6 +456,26 @@ def test_body_from_fields_applies_defaults_and_type():
     assert body["enabled"] == 1             # flag default
 
 
+def test_cmd_create_invokes_post_write_hook():
+    from akt.resources import Resource
+    from akt.commands import cmd_create
+
+    calls = []
+
+    class RecordingClient(FakeClient):
+        def post(self, endpoint, body, **kw):
+            return {"data": {"id": 99, "name": body.get("name")}}
+
+    def hook(res, client, record, ns):
+        calls.append(record)
+
+    res = Resource(noun="x", endpoint="x", fields=[], post_write=hook)
+    ns = SimpleNamespace(set_=None, data=None, attachment=None, json=True)
+    rc = cmd_create(res, RecordingClient(), ns)
+    assert rc == 0
+    assert calls == [{"id": 99, "name": None}]   # hook saw the created record
+
+
 def test_body_from_fields_skips_local_fields():
     from akt.resources import Resource, f, body_from_fields
     res = Resource(noun="x", endpoint="x", fields=[

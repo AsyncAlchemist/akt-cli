@@ -56,6 +56,8 @@ def cmd_create(res: Resource, client: Client, ns: Any) -> int:
     else:
         payload = client.post(endpoint, body, type_scope=type_scope)
     data = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if res.post_write:
+        res.post_write(res, client, data, ns)
     emit(data, as_json=True)
     return 0
 
@@ -104,6 +106,8 @@ def cmd_update(res: Resource, client: Client, ns: Any) -> int:
             body["remove_attachment"] = 1
         payload = client.put(path, body, type_scope=type_scope)
     data = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if res.post_write:
+        res.post_write(res, client, data, ns)
     emit(data, as_json=True)
     return 0
 

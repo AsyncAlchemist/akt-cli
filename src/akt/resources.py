@@ -70,6 +70,10 @@ class Resource:
     # returns (path, type_scope) for update; lets document-linked payments use
     # the nested route (the flat /transactions route 400s on any document_id)
     update_resolver: Callable[["Resource", Client, str, dict], "tuple[str, str | None]"] | None = None
+    # runs after a successful create/update on the /api path, with the returned
+    # record + the argparse namespace; used by bank to re-date the auto-posted
+    # opening-balance journal entry.
+    post_write: Callable[["Resource", Client, dict, Any], None] | None = None
 
     def contact_scope(self) -> str:
         """ACL scope of the contact tied to a document resource."""
