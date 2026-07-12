@@ -13,6 +13,7 @@ from .resources import (
     build_journal_update,
     build_payment_create,
     build_transfer_create,
+    redate_opening_balance,
     resolve_payment_delete,
     resolve_payment_update,
 )
@@ -101,6 +102,10 @@ BANK = Resource(
         f("type", "Account type", default="bank"),
         f("currency-code", "Currency code", default="USD"),
         f("opening-balance", "Opening balance", default=0),
+        f("opening-balance-date",
+          "Date for the opening-balance journal entry (YYYY-MM-DD). Re-dates the "
+          "entry the Double-Entry module auto-posts; needs a positive opening balance.",
+          dest="opening_balance_date", local=True),
         f("bank-name", "Bank name"),
         f("bank-phone", "Bank phone"),
         f("bank-address", "Bank address"),
@@ -112,6 +117,7 @@ BANK = Resource(
         ("Enabled", "enabled"),
     ],
     help="Bank / cash accounts",
+    post_write=redate_opening_balance,
 )
 
 CATEGORY = Resource(
