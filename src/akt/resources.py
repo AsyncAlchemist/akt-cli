@@ -12,6 +12,7 @@ import datetime as _dt
 import json
 import mimetypes
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -781,6 +782,33 @@ def _find_opening_balance_je(client: Client, record: dict) -> dict | None:
         return None
     matches.sort(key=lambda e: str(e.get("created_at") or ""), reverse=True)
     return matches[0]
+
+
+def redate_opening_balance(res: "Resource", client: Client, record: dict, ns: Any) -> None:
+    """post_write hook for bank create/update: re-date the auto-posted
+    opening-balance journal entry to ``--opening-balance-date``.
+
+    The Double-Entry module stamps that entry with the account's created_at and
+    exposes no date field, so we set the balance normally (keeping the Banking
+    register correct) and rewrite the entry's date here. Re-dating via the
+    journal-entry route also rewrites each ledger's issued_at (what reports
+    filter on), and the module's account-update path only touches ledger
+    amounts, so the date sticks across later edits."""
+    date = getattr(ns, "opening_balance_date", None)
+    if not date:
+        return
+    je = _find_opening_balance_je(client, record)
+    if je is None:
+        print(f"note: no opening-balance journal entry found for {res.noun} "
+              f"{record.get('id')}; --opening-balance-date had no effect "
+              f"(opening balance is 0, or the Double-Entry module / owners-"
+              f"contribution account is not configured)", file=sys.stderr)
+        return
+    number = je.get("journal_number") or _next_journal_number(client)
+    body = _journal_reput_body(je, paid_at=_normalize_date(date), journal_number=number)
+    client.put(f"journal-entry/{je['id']}", body)
+    print(f"note: re-dated opening-balance journal entry {je['id']} to {date}",
+          file=sys.stderr)
 
 
 # --------------------------------------------------------------------------
