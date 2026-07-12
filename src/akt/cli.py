@@ -21,7 +21,7 @@ from .commands import (
 from .output import emit
 from .registry import RESOURCES, BY_NOUN
 from .resources import Resource, load_data_arg
-from .coa import load_coa
+from .coa import load_coa, plan_sync, render_plan
 
 
 def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bool) -> None:
@@ -163,6 +163,19 @@ def _build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--type-scope", help="search=type:X scope for contacts/documents")
     rp.set_defaults(_special="raw")
 
+    coap = sub.add_parser("coa", parents=[common],
+                          help="Sync chart-of-accounts <-> categories from a COA config")
+    coav = coap.add_subparsers(dest="coa_verb", metavar="<verb>")
+    cdp = coav.add_parser("diff", parents=[common], help="Preview the sync plan (read-only)")
+    cdp.add_argument("--prune", action="store_true",
+                     help="also show accounts/categories that --prune would disable")
+    cdp.set_defaults(_special="coa_diff")
+    csp = coav.add_parser("sync", parents=[common],
+                          help="Apply: create/rename accounts + mirror categories")
+    csp.add_argument("--prune", action="store_true",
+                     help="disable accounts/categories absent from the config (never deletes)")
+    csp.set_defaults(_special="coa_sync")
+
     return parser
 
 
@@ -188,6 +201,16 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
         result = client.request(ns.method.upper(), ns.path, params=params or None,
                                 json_body=body, type_scope=ns.type_scope)
         emit(result, as_json=True)
+        return 0
+    if name == "coa_diff":
+        coa = ns._coa
+        if coa is None:
+            raise ValueError("no COA config found (use --coa FILE or set AKT_COA_FILE)")
+        live_accounts = client.list("chart-of-accounts", all_pages=True)
+        live_categories = client.list("categories", all_pages=True)
+        plan = plan_sync(coa, live_accounts, live_categories, prune=ns.prune)
+        for line in render_plan(plan):
+            print(line)
         return 0
     raise ValueError(name)
 

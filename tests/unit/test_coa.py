@@ -238,3 +238,66 @@ from akt.cli import _build_parser
 def test_coa_flag_parses_to_coa_file():
     ns = _build_parser().parse_args(["--coa", "/tmp/chart.toml", "payment", "list"])
     assert ns.coa_file == "/tmp/chart.toml"
+
+
+from akt.coa import CoaPlan, plan_sync, render_plan
+
+
+def _cfg():
+    return parse_coa(_MINIMAL)
+
+
+def test_plan_creates_missing_accounts_and_categories():
+    # live has only code 400 (as seeded name "Sales"); nothing else exists
+    live_accounts = [{"id": 1, "code": 400, "name": "Sales", "type_id": 13, "enabled": 1}]
+    live_categories = []
+    plan = plan_sync(_cfg(), live_accounts, live_categories, prune=False)
+    create_codes = {a.code for a in plan.accounts_create}
+    assert create_codes == {628, 310, 850}          # 400 exists, others missing
+    rename = {a.code for a, _ in plan.accounts_rename}
+    assert rename == {400}                            # "Sales" -> "API Subscription Revenue"
+    cat_create = {a.category for a in plan.categories_create}
+    assert cat_create == {"API Subscription Revenue", "Other / Uncategorized", "Owners Draw"}
+    assert all(a.code != 850 for a in plan.categories_create)   # mirror=false
+
+
+def test_plan_no_op_when_in_sync():
+    live_accounts = [
+        {"id": 1, "code": 400, "name": "API Subscription Revenue", "type_id": 13, "enabled": 1},
+        {"id": 2, "code": 628, "name": "Other / Uncategorized", "type_id": 12, "enabled": 1},
+        {"id": 3, "code": 310, "name": "Owners Draw", "type_id": 16, "enabled": 1},
+        {"id": 4, "code": 850, "name": "BofA Checking", "type_id": 6, "enabled": 1},
+    ]
+    live_categories = [
+        {"id": 10, "name": "API Subscription Revenue", "type": "income", "enabled": 1},
+        {"id": 11, "name": "Other / Uncategorized", "type": "expense", "enabled": 1},
+        {"id": 12, "name": "Owners Draw", "type": "other", "enabled": 1},
+    ]
+    plan = plan_sync(_cfg(), live_accounts, live_categories, prune=False)
+    assert not any([plan.accounts_create, plan.accounts_rename,
+                    plan.categories_create, plan.categories_rename])
+
+
+def test_plan_prune_disables_extras_only_when_requested():
+    live_accounts = [{"id": 9, "code": 999, "name": "Legacy", "type_id": 12, "enabled": 1}]
+    live_categories = [{"id": 20, "name": "Legacy Cat", "type": "expense", "enabled": 1}]
+    no_prune = plan_sync(_cfg(), live_accounts, live_categories, prune=False)
+    assert no_prune.accounts_disable == [] and no_prune.categories_disable == []
+    pruned = plan_sync(_cfg(), live_accounts, live_categories, prune=True)
+    assert [a["code"] for a in pruned.accounts_disable] == [999]
+    assert [c["name"] for c in pruned.categories_disable] == ["Legacy Cat"]
+
+
+def test_plan_prune_ignores_already_disabled():
+    live_accounts = [{"id": 9, "code": 999, "name": "Legacy", "type_id": 12, "enabled": 0}]
+    pruned = plan_sync(_cfg(), live_accounts, [], prune=True)
+    assert pruned.accounts_disable == []      # already disabled -> nothing to do
+
+
+def test_render_plan_is_human_readable():
+    live_accounts = [{"id": 1, "code": 400, "name": "Sales", "type_id": 13, "enabled": 1}]
+    lines = render_plan(plan_sync(_cfg(), live_accounts, [], prune=False))
+    joined = "\n".join(lines)
+    assert "create account 628" in joined
+    assert "rename account 400" in joined and "Sales" in joined
+    assert "create category" in joined
