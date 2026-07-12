@@ -129,6 +129,8 @@ class CoaPlan:
     accounts_create: list[CoaAccount] = field(default_factory=list)
     accounts_rename: list[tuple[CoaAccount, dict]] = field(default_factory=list)
     categories_create: list[CoaAccount] = field(default_factory=list)
+    # Always empty by design: categories are matched by (name, type) in
+    # plan_sync, so a match means there is nothing to rename.
     categories_rename: list[tuple[CoaAccount, dict]] = field(default_factory=list)
     accounts_disable: list[dict] = field(default_factory=list)
     categories_disable: list[dict] = field(default_factory=list)
@@ -156,11 +158,17 @@ def plan_sync(config: CoaConfig, live_accounts: list[dict],
         elif str(live.get("name")) != acct.name:
             plan.accounts_rename.append((acct, live))
 
+    # Mirror-category names are unique by construction (parse_coa rejects
+    # duplicate category names among mirrored accounts), so this loop can
+    # never enqueue the same categories_create entry twice.
     for acct in config.mirrored:
         live = live_cat.get((acct.category, acct.category_type))
         if live is None:
             plan.categories_create.append(acct)
-        # name+type already matched -> nothing to rename (name is the join key)
+        # name+type already matched -> nothing to rename (name is the join key).
+        # categories_rename therefore stays empty by design: a live category is
+        # only ever matched by (name, type), so a match means there's nothing
+        # to rename — see CoaPlan.categories_rename below.
 
     if prune:
         config_codes = {a.code for a in config.accounts}
