@@ -279,6 +279,12 @@ def resolve_coding(config: CoaConfig, client, *, account_ref: str | None,
                 f"{category_ref!r} -> {by_cat.code}")
         acct = by_cat
 
+    if not acct.mirror:
+        raise ValueError(
+            f"account {acct.code} ({acct.name}) has mirror=false — it has no mirror "
+            f"category, so it can't be coded onto a payment via --account/--category "
+            f"(only mirrored income/expense accounts can be)")
+
     live_accounts = client.list("chart-of-accounts", all_pages=True)
     de_id = next((a["id"] for a in live_accounts if int(a.get("code", -1)) == acct.code), None)
     if de_id is None:
