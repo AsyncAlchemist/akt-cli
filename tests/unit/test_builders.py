@@ -456,6 +456,18 @@ def test_body_from_fields_applies_defaults_and_type():
     assert body["enabled"] == 1             # flag default
 
 
+def test_body_from_fields_skips_local_fields():
+    from akt.resources import Resource, f, body_from_fields
+    res = Resource(noun="x", endpoint="x", fields=[
+        f("name", "n", required=True),
+        f("ghost", "local only", local=True),
+    ])
+    ns = SimpleNamespace(name="Acme", ghost="2024-12-31", set_=None, data=None)
+    body = body_from_fields(res, ns, for_update=False)
+    assert body["name"] == "Acme"
+    assert "ghost" not in body        # local field never enters the body
+
+
 def test_connection_flags_do_not_collide_with_resource_fields():
     """Regression: a customer's --email must not overwrite the auth --email."""
     parser = _build_parser()
