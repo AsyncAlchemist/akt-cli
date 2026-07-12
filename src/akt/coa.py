@@ -2,8 +2,8 @@
 
 akt defines a small COA config schema. When present, it lets `coa sync`
 reconcile the double-entry chart of accounts and a 1:1 mirror of Akaunting
-categories, and lets `payment create` code by account/category with the other
-side filled in automatically. The feature is inert when no config is found.
+categories, and lets `payment create` code by --account with the mirror
+category filled in automatically. The feature is inert when no config is found.
 """
 
 from __future__ import annotations
@@ -50,12 +50,6 @@ class CoaConfig:
     def by_name(self, name: str) -> CoaAccount | None:
         for a in self.accounts:
             if a.name == name:
-                return a
-        return None
-
-    def by_category(self, name: str) -> CoaAccount | None:
-        for a in self.accounts:
-            if a.mirror and a.category == name:
                 return a
         return None
 
@@ -260,29 +254,17 @@ def _find_account(config: CoaConfig, ref: str) -> CoaAccount:
     return acct
 
 
-def resolve_coding(config: CoaConfig, client, *, account_ref: str | None,
-                   category_ref: str | None) -> tuple[int, int]:
-    """Resolve --account / --category to live (de_account_id, category_id).
+def resolve_coding(config: CoaConfig, client, *, account_ref: str) -> tuple[int, int]:
+    """Resolve --account to live (de_account_id, category_id).
 
-    Both flags (if given) must resolve to the same config account. The account
-    and its mirror category must already exist in Akaunting (run `coa sync`)."""
-    acct = None
-    if account_ref is not None:
-        acct = _find_account(config, account_ref)
-    if category_ref is not None:
-        by_cat = config.by_category(category_ref)
-        if by_cat is None:
-            raise ValueError(f"category {category_ref!r} is not in the COA config")
-        if acct is not None and by_cat.code != acct.code:
-            raise ValueError(
-                f"--account and --category disagree: {account_ref!r} -> {acct.code}, "
-                f"{category_ref!r} -> {by_cat.code}")
-        acct = by_cat
+    The account must already exist in Akaunting (run `coa sync`); category_id
+    is auto-derived from its mirror category, which must also already exist."""
+    acct = _find_account(config, account_ref)
 
     if not acct.mirror:
         raise ValueError(
             f"account {acct.code} ({acct.name}) has mirror=false — it has no mirror "
-            f"category, so it can't be coded onto a payment via --account/--category "
+            f"category, so it can't be coded onto a payment via --account "
             f"(only mirrored income/expense accounts can be)")
 
     live_accounts = client.list("chart-of-accounts", all_pages=True)

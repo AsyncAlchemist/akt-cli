@@ -92,8 +92,8 @@ ITEM = Resource(
     help="Products and services",
 )
 
-ACCOUNT = Resource(
-    noun="account",
+BANK = Resource(
+    noun="bank",
     endpoint="accounts",
     fields=[
         f("name", "Account name", required=True),
@@ -221,14 +221,12 @@ PAYMENT = Resource(
         f("invoice", "Invoice id to apply an income payment to"),
         f("bill", "Bill id to apply an expense payment to"),
         f("account", "GL/chart-of-accounts code or name to post to (the double-entry "
-                     "account — NOT the bank --account-id). Requires a --coa config; "
-                     "auto-fills the mirrored category."),
-        f("category", "Mirror category name to post under (requires a --coa config); "
-                      "auto-fills the corresponding GL account."),
+                     "account). Requires a --coa config; auto-fills the mirrored "
+                     "category. See --bank for the bank/cash account."),
         f("document-id", "Linked document id (advanced)"),
         f("contact-id", "Contact id"),
         f("amount", "Payment amount"),
-        f("account-id", "Bank/cash account id"),
+        f("bank", "Bank/cash account id", dest="account_id"),
         f("category-id", "Category id"),
         f("paid-at", "Payment date/time (YYYY-MM-DD)"),
         f("currency-code", "Currency code"),
@@ -251,8 +249,8 @@ TRANSFER = Resource(
     noun="transfer",
     endpoint="transfers",
     fields=[
-        f("from-account-id", "Source account id", required=True),
-        f("to-account-id", "Destination account id", required=True),
+        f("from-bank", "Source bank/cash account id", dest="from_account_id", required=True),
+        f("to-bank", "Destination bank/cash account id", dest="to_account_id", required=True),
         f("amount", "Amount", required=True),
         f("transferred-at", "Transfer date/time (YYYY-MM-DD)"),
         f("payment-method", "Payment method code", default="offline-payments.cash.1"),
@@ -277,15 +275,15 @@ TRANSFER = Resource(
 # while list/get keep using the /api surface (endpoint). journal-entry is full
 # API CRUD.
 
-CHART_OF_ACCOUNT = Resource(
-    noun="chart-of-account",
+ACCOUNT = Resource(
+    noun="account",
     endpoint="chart-of-accounts",
     web_endpoint="double-entry/chart-of-accounts",
     fields=[
         f("name", "Account name", required=True),
         f("code", "Account code (unique integer per company)"),
         f("type-id", "Double-entry account type id (see an existing account's type_id)"),
-        f("account-id", "Parent account id (makes this a sub-account)"),
+        f("parent-id", "Parent account id (makes this a sub-account)", dest="account_id"),
         f("description", "Description"),
         f("enabled", "Enable the record", is_flag=True, default=1),
     ],
@@ -296,7 +294,8 @@ CHART_OF_ACCOUNT = Resource(
     supports_toggle=False,
     build_create=build_account_create,
     build_update=build_account_update,
-    help="Chart of accounts (read via API; create/update/delete via web, double-entry module)",
+    help="Chart of accounts (general ledger; read via API, create/update/delete via web, "
+         "double-entry module)",
 )
 
 JOURNAL_ENTRY = Resource(
@@ -325,9 +324,9 @@ JOURNAL_ENTRY = Resource(
 
 
 RESOURCES: list[Resource] = [
-    CUSTOMER, VENDOR, ITEM, ACCOUNT, CATEGORY, TAX, CURRENCY,
+    CUSTOMER, VENDOR, ITEM, BANK, CATEGORY, TAX, CURRENCY,
     INVOICE, BILL, PAYMENT, TRANSFER,
-    CHART_OF_ACCOUNT, JOURNAL_ENTRY,
+    ACCOUNT, JOURNAL_ENTRY,
 ]
 
 BY_NOUN = {r.noun: r for r in RESOURCES}

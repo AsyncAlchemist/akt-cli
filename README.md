@@ -3,7 +3,7 @@
 # akt — Akaunting CLI toolbox
 ### Drive your Akaunting accounting instance entirely from the command line
 
->`akt` gives you full create / read / update / delete for customers, vendors, items, invoices, bills, payments, accounts, categories, taxes, currencies and transfers — plus double-entry journal entries and the chart of accounts, and a `raw` escape hatch for any other endpoint. Built and tested against [Akaunting](https://akaunting.com) **3.1.x**; works with any 3.x deployment that exposes the REST API.
+>`akt` gives you full create / read / update / delete for customers, vendors, items, invoices, bills, payments, banks, categories, taxes, currencies and transfers — plus double-entry journal entries and the chart of accounts, and a `raw` escape hatch for any other endpoint. Built and tested against [Akaunting](https://akaunting.com) **3.1.x**; works with any 3.x deployment that exposes the REST API.
 
 [![PyPI Version](https://img.shields.io/pypi/v/akt-cli.svg?style=flat-square)](https://pypi.org/project/akt-cli/)
 [![Tests](https://img.shields.io/github/actions/workflow/status/AsyncAlchemist/akt-cli/ci.yml?branch=main&label=tests&style=flat-square)](https://github.com/AsyncAlchemist/akt-cli/actions/workflows/ci.yml)
@@ -81,13 +81,14 @@ Akaunting folds several nouns onto shared endpoints; `akt` hides that:
 | `bill`     | `documents`    | document of type `bill`                            |
 | `payment`  | `transactions` | income (invoice) or expense (bill) transaction    |
 | `journal-entry` | `journal-entry` | double-entry general-ledger entry (module)     |
-| `chart-of-account` | `chart-of-accounts` | GL accounts — read via API, CRUD via web    |
-| `item`, `account`, `category`, `tax`, `currency`, `transfer` | as named | |
+| `account`  | `chart-of-accounts` | GL accounts (general ledger) — read via API, CRUD via web |
+| `bank`     | `accounts`     | bank / cash accounts (the money, not the GL)      |
+| `item`, `category`, `tax`, `currency`, `transfer` | as named | |
 
-> `journal-entry` and `chart-of-account` require the **Double-Entry** module
+> `journal-entry` and `account` require the **Double-Entry** module
 > installed on the instance. The module publishes chart-of-accounts read-only on
 > the `/api` surface (index/show); its create/update/delete live only on the
-> session/CSRF **web** route. `akt chart-of-account` gives you the full verb set
+> session/CSRF **web** route. `akt account` gives you the full verb set
 > anyway — `list`/`get` hit `/api`, while `create`/`update`/`delete` transparently
 > drive the web CRUD with your admin session (the same mechanism
 > `download-attachment` already uses).
@@ -145,6 +146,10 @@ akt item create --name "Consulting Hour" --sale-price 150 --purchase-price 0
 akt category create --name "Services" --type income
 akt tax create --name "Sales Tax" --rate 8.25
 
+# Bank / cash accounts (the money side — see the COA section below for GL accounts)
+akt bank create --name "Business Checking" --number 1001 --currency-code USD
+akt bank list
+
 # Invoice with line items (totals computed server-side; number auto-generated)
 akt invoice create --contact 12 \
     --item 'name=Consulting,price=150,quantity=10,item_id=2' \
@@ -171,16 +176,16 @@ akt bill download-attachment 41 --out ./downloads   # save to disk
 akt payment update 57 --remove-attachment           # clear attachments
 
 # Double-entry general ledger (requires the Double-Entry module)
-akt chart-of-account list                              # read the chart of accounts
-akt chart-of-account get 12
+akt account list                                       # read the chart of accounts
+akt account get 12
 
 # Build the chart of accounts as code (create/update/delete run via the web
 # session; type-id is the double-entry account-type id — copy it from an
 # existing account's `type_id`)
-akt chart-of-account create --name "Cash on Hand" --code 1010 --type-id 6
-akt chart-of-account create --name "Petty Cash" --code 1011 --type-id 6 --account-id 12
-akt chart-of-account update 12 --code 1000 --description "Operating cash"
-akt chart-of-account delete 12
+akt account create --name "Cash on Hand" --code 1010 --type-id 6
+akt account create --name "Petty Cash" --code 1011 --type-id 6 --parent-id 12
+akt account update 12 --code 1000 --description "Operating cash"
+akt account delete 12
 
 # Post a balanced journal entry (>= 2 lines; debits must equal credits;
 # journal number auto-generated, basis defaults to accrual)
@@ -198,7 +203,8 @@ akt journal-entry create --description "Vendor bill accrual" --basis accrual \
 Akaunting keeps *categories* (required on every transaction) separate from the
 double-entry *chart of accounts*. Point akt at a COA config and it keeps them in
 lockstep: one list to maintain (accounts), a 1:1 mirror of categories generated
-from it, and `payment create` coded by either — with the other side filled in.
+from it, and `payment create` coded by `--account` — with the mirror category
+filled in automatically.
 
 akt finds the config at `--coa FILE` → `AKT_COA_FILE` → `./coa.toml` →
 `~/.config/akt/coa.toml`. Minimal schema (extra keys are ignored):
@@ -217,13 +223,12 @@ akt coa diff                 # preview: accounts/categories to create or rename
 akt coa sync                 # apply (create + rename; idempotent)
 akt coa sync --prune         # also DISABLE accounts/categories absent from the config
 
-# code a transaction by GL account OR by category — akt fills the other:
-akt payment create --type expense --account-id 1 --amount 120 --account 628
-akt payment create --type income  --account-id 1 --amount 500 --category "API Subscription Revenue"
+# code a transaction by GL account — akt auto-fills the mirror category:
+akt payment create --type expense --bank 1 --amount 120 --account 628
 ```
 
-`--account` takes a GL code or name (the double-entry account — not the bank
-`--account-id`). An explicit `--set de_account_id=` still wins.
+`--account` takes a GL code or name (the double-entry account; see `--bank` for
+the bank/cash account). An explicit `--set de_account_id=` still wins.
 
 # Anything else: raw API access
 akt raw GET reports
@@ -271,7 +276,7 @@ Driving Akaunting's API directly has sharp edges; `akt` papers over these:
   `double-entry.journal.number_*` settings when you don't pass one.
 * **Chart-of-accounts CRUD is web-only** — the Double-Entry module exposes
   accounts read-only on `/api`; create/update/delete exist solely on the
-  session/CSRF web route. `akt chart-of-account create|update|delete` logs in a
+  session/CSRF web route. `akt account create|update|delete` logs in a
   web session (reusing your admin credentials, cached for the process), attaches
   the CSRF token, and unwraps Akaunting's `{success, error, data, message}` AJAX
   envelope — so a server-side block (e.g. *deleting an account that has ledgers*)
