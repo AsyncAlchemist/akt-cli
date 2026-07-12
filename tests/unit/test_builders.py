@@ -375,6 +375,48 @@ def test_build_journal_update_preserves_ledgers_with_ids():
     ]
 
 
+def test_journal_reput_body_preserves_ledgers_and_sets_date():
+    from akt.resources import _journal_reput_body
+    current = {
+        "paid_at": "2026-07-12T00:00:00+00:00", "journal_number": None,
+        "description": "Opening Balance;Checking", "basis": "accrual",
+        "currency_code": "USD", "currency_rate": 1,
+        "reference": "opening-balance:14",
+        "ledgers": {"data": [
+            {"id": 5, "account_id": 14, "debit": 500, "credit": None},
+            {"id": 6, "account_id": 30, "debit": None, "credit": 500},
+        ]},
+    }
+    body = _journal_reput_body(current, paid_at="2024-12-31 00:00:00",
+                               journal_number="MJE-00009")
+    assert body["paid_at"] == "2024-12-31 00:00:00"
+    assert body["journal_number"] == "MJE-00009"   # backfilled by caller
+    assert body["description"] == "Opening Balance;Checking"
+    assert body["reference"] == "opening-balance:14"
+    assert body["amount"] == 0
+    assert body["items"] == [
+        {"account_id": 14, "debit": 500.0, "credit": 0.0, "id": 5},
+        {"account_id": 30, "debit": 0.0, "credit": 500.0, "id": 6},
+    ]
+
+
+def test_find_opening_balance_je_matches_and_picks_newest():
+    from akt.resources import _find_opening_balance_je
+    client = FakeClient(journals_list=[
+        {"id": 1, "reference": "opening-balance:14", "description": "Opening Balance;Checking",
+         "created_at": "2026-07-12T10:00:00+00:00"},
+        {"id": 2, "reference": "opening-balance:14", "description": "Opening Balance;Checking",
+         "created_at": "2026-07-12T11:00:00+00:00"},          # newer duplicate name
+        {"id": 3, "reference": None, "description": "Some manual entry;Checking",
+         "created_at": "2026-07-12T12:00:00+00:00"},          # not an opening balance
+        {"id": 4, "reference": "opening-balance:99", "description": "Opening Balance;Savings",
+         "created_at": "2026-07-12T09:00:00+00:00"},          # different account
+    ])
+    je = _find_opening_balance_je(client, {"id": 7, "name": "Checking"})
+    assert je["id"] == 2                                       # newest matching
+    assert _find_opening_balance_je(client, {"id": 8, "name": "Nonexistent"}) is None
+
+
 # --------------------------------------------------------------------------
 # account (GL / chart-of-accounts, web-surface CRUD) builder
 # --------------------------------------------------------------------------
