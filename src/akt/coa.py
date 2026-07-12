@@ -101,10 +101,10 @@ def parse_coa(text: str) -> CoaConfig:
 
 
 def _coa_candidate_files(explicit: str | None) -> list[Path]:
-    files: list[Path] = []
     if explicit:
-        files.append(Path(explicit).expanduser())
-    elif os.environ.get("AKT_COA_FILE"):
+        return [Path(explicit).expanduser()]
+    files: list[Path] = []
+    if os.environ.get("AKT_COA_FILE"):
         files.append(Path(os.environ["AKT_COA_FILE"]).expanduser())
     files.append(Path.cwd() / "coa.toml")
     files.append(Path.home() / ".config" / "akt" / "coa.toml")
