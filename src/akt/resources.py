@@ -741,6 +741,49 @@ def build_journal_update(res: Resource, client: Client, ns: Any, current: dict) 
 
 
 # --------------------------------------------------------------------------
+# opening-balance journal entry re-dating (bank post_write hook)
+# --------------------------------------------------------------------------
+
+def _journal_reput_body(current: dict, *, paid_at: str, journal_number: str) -> dict:
+    """Full journal-entry PUT body that re-dates an existing entry, preserving
+    its ledgers (by id) and amounts. ``journal_number`` is supplied by the caller
+    (the server-created opening-balance entry carries none, but the API requires
+    one)."""
+    body: dict[str, Any] = {
+        "paid_at": paid_at,
+        "journal_number": journal_number,
+        "description": current.get("description"),
+        "basis": current.get("basis") or "accrual",
+        "currency_code": current.get("currency_code") or "USD",
+        "currency_rate": current.get("currency_rate", 1) or 1,
+        "amount": 0,
+        "items": _journal_items_from_current(current),
+    }
+    if current.get("reference"):
+        body["reference"] = current["reference"]
+    return body
+
+
+def _find_opening_balance_je(client: Client, record: dict) -> dict | None:
+    """Locate the opening-balance journal entry the Double-Entry module auto-posts
+    for a bank/cash account. It carries ``reference = "opening-balance:<coa_id>"``
+    and ``description`` ending ``";<account name>"``. The chart-of-accounts API
+    doesn't expose the bank<->coa link, so match on those two fields and, if an
+    account name is duplicated, take the newest by ``created_at``."""
+    name = str(record.get("name") or "")
+    suffix = ";" + name
+    matches = [
+        e for e in client.list("journal-entry", all_pages=True)
+        if str(e.get("reference") or "").startswith("opening-balance:")
+        and str(e.get("description") or "").endswith(suffix)
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda e: str(e.get("created_at") or ""), reverse=True)
+    return matches[0]
+
+
+# --------------------------------------------------------------------------
 # chart-of-accounts (double-entry) — web-surface CRUD body builder
 # --------------------------------------------------------------------------
 
