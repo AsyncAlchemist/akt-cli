@@ -74,7 +74,11 @@ def parse_coa(text: str) -> CoaConfig:
         code = int(row["code"])
         name = str(row["name"])
         type_id = int(row["type_id"])
-        mirror = bool(row.get("mirror", True))
+        mirror = row.get("mirror", True)
+        if not isinstance(mirror, bool):
+            raise ValueError(
+                f"account '{name}': 'mirror' must be a boolean (true/false), "
+                f"got {mirror!r} — did you quote it?")
         category = str(row.get("category", name))
         if code in seen_codes:
             raise ValueError(f"duplicate code {code}")

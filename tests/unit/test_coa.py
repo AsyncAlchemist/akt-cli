@@ -52,6 +52,13 @@ def test_parse_mirror_false_excluded_from_mirrored():
     assert {400, 628, 310} <= codes
 
 
+def test_parse_rejects_quoted_mirror():
+    # bare TOML false is fine; a quoted "false" is a mistake and must not
+    # silently become truthy — fail fast like code/type_id do.
+    with pytest.raises(ValueError, match="mirror.*boolean"):
+        parse_coa('[[account]]\ncode = 850\nname = "Bank"\ntype_id = 6\nmirror = "false"\n')
+
+
 def test_parse_category_override():
     cfg = parse_coa("""
 [[account]]
