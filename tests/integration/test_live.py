@@ -380,3 +380,56 @@ def test_journal_entry_rejects_imbalance(akt):
                "--item", "account_id=2,credit=90", raw=True)
     assert proc.returncode != 0
     assert "balance" in proc.stderr.lower()
+
+
+# --------------------------------------------------------------------------
+# COA config: `coa sync` creates an account + mirror category; a coded
+# payment lands on both.
+# --------------------------------------------------------------------------
+
+def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
+    """coa sync creates an account + mirror category; a coded payment lands on both."""
+    import json
+    import subprocess
+
+    from conftest import _AKT_CMD
+
+    # A unique code/name so the test is idempotent across runs.
+    coa_file = tmp_path / "coa.toml"
+    coa_file.write_text(
+        '[[account]]\n'
+        'code = 991\n'
+        'name = "AKT Test Revenue 991"\n'
+        'type_id = 13\n'
+    )
+    env = {**akt_env, "AKT_COA_FILE": str(coa_file)}
+
+    def run_json(*args):
+        proc = subprocess.run([*_AKT_CMD, "--json", *args],
+                              capture_output=True, text=True, env=env)
+        assert proc.returncode == 0, proc.stderr
+        return json.loads(proc.stdout) if proc.stdout.strip() else None
+
+    def run_text(*args):
+        proc = subprocess.run([*_AKT_CMD, *args], capture_output=True, text=True, env=env)
+        assert proc.returncode == 0, proc.stderr
+        return proc.stdout
+
+    # sync (idempotent) then locate the created account + category
+    run_text("coa", "sync")
+    accounts = run_json("chart-of-account", "list")
+    acct = next(a for a in accounts if int(a["code"]) == 991)
+    cats = run_json("category", "list")
+    cat = next(c for c in cats if c["name"] == "AKT Test Revenue 991" and c["type"] == "income")
+    tracker("chart-of-account", acct["id"])
+    tracker("category", cat["id"])
+
+    # a payment coded by account fills BOTH de_account_id and category_id
+    txn = run_json("payment", "create", "--type", "income", "--account-id", "1",
+                   "--amount", "0.01", "--paid-at", "2026-07-12",
+                   "--description", "coa coded smoke", "--account", "991")
+    tracker("payment", txn["id"])
+    assert str(txn["category_id"]) == str(cat["id"])
+    # de_account_id surfaces on the transaction's ledgers as the item-side account
+    assert any(int(l.get("account_id", 0)) == int(acct["id"])
+               for l in txn.get("ledgers", {}).get("data", []))
