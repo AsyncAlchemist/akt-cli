@@ -21,7 +21,7 @@ from .commands import (
 from .output import emit
 from .registry import RESOURCES, BY_NOUN
 from .resources import Resource, load_data_arg
-from .coa import load_coa, plan_sync, render_plan
+from .coa import load_coa, plan_sync, render_plan, apply_plan
 
 
 def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bool) -> None:
@@ -211,6 +211,20 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
         plan = plan_sync(coa, live_accounts, live_categories, prune=ns.prune)
         for line in render_plan(plan):
             print(line)
+        return 0
+    if name == "coa_sync":
+        coa = ns._coa
+        if coa is None:
+            raise ValueError("no COA config found (use --coa FILE or set AKT_COA_FILE)")
+        live_accounts = client.list("chart-of-accounts", all_pages=True)
+        live_categories = client.list("categories", all_pages=True)
+        plan = plan_sync(coa, live_accounts, live_categories, prune=ns.prune)
+        for line in render_plan(plan):
+            print(line)
+        if plan.is_empty:
+            return 0
+        summary = apply_plan(client, plan, prune=ns.prune)
+        print("applied: " + ", ".join(f"{k}={v}" for k, v in summary.items() if v))
         return 0
     raise ValueError(name)
 

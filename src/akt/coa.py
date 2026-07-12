@@ -203,3 +203,51 @@ def render_plan(plan: CoaPlan) -> list[str]:
     if not lines:
         lines.append("in sync — nothing to do")
     return lines
+
+
+def _account_form(acct: CoaAccount) -> list[tuple[str, str]]:
+    """The web-CRUD form body for a chart-of-accounts create/update."""
+    from .resources import flatten_form  # local import: avoids resources<->coa cycle
+    return flatten_form({
+        "code": acct.code,
+        "name": acct.name,
+        "type_id": acct.type_id,
+        "enabled": 1,
+        "is_sub_account": "false",
+    })
+
+
+def apply_plan(client, plan: "CoaPlan", *, prune: bool) -> dict:
+    """Execute the plan against Akaunting. Accounts use the web CRUD route
+    (chart-of-accounts is read-only on /api); categories use /api."""
+    summary = {"accounts_created": 0, "accounts_renamed": 0,
+               "categories_created": 0, "accounts_disabled": 0,
+               "categories_disabled": 0}
+
+    for acct in plan.accounts_create:
+        client.web_json("POST", "double-entry/chart-of-accounts", _account_form(acct))
+        summary["accounts_created"] += 1
+
+    for acct, live in plan.accounts_rename:
+        client.web_json("PATCH", f"double-entry/chart-of-accounts/{live['id']}",
+                        _account_form(acct))
+        summary["accounts_renamed"] += 1
+
+    for acct in plan.categories_create:
+        client.post("categories", {
+            "name": acct.category,
+            "type": acct.category_type,
+            "color": "#00bcd4",
+            "enabled": 1,
+        })
+        summary["categories_created"] += 1
+
+    if prune:
+        for live in plan.accounts_disable:
+            client.web_json("GET", f"double-entry/chart-of-accounts/{live['id']}/disable")
+            summary["accounts_disabled"] += 1
+        for live in plan.categories_disable:
+            client.get(f"categories/{live['id']}/disable")
+            summary["categories_disabled"] += 1
+
+    return summary

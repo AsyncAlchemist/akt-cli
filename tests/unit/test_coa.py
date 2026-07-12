@@ -312,3 +312,70 @@ def test_render_plan_is_human_readable():
     assert "create account 628" in joined
     assert "rename account 400" in joined and "Sales" in joined
     assert "create category" in joined
+
+
+from akt.coa import apply_plan
+
+
+class RecordingClient:
+    """Records web_json / api calls apply_plan makes; returns benign values."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def web_json(self, method, path, form=None):
+        self.calls.append(("web_json", method, path, dict(form or [])))
+        return {"id": 999}
+
+    def post(self, path, body, **kw):
+        self.calls.append(("post", path, body))
+        return {"data": {"id": 888}}
+
+    def put(self, path, body, **kw):
+        self.calls.append(("put", path, body))
+        return {"data": {"id": body.get("id")}}
+
+    def get(self, path, **kw):
+        self.calls.append(("get", path))
+        return {"data": {}}
+
+
+def test_apply_creates_accounts_via_web_and_categories_via_api():
+    live_accounts = [{"id": 1, "code": 400, "name": "Sales", "type_id": 13, "enabled": 1}]
+    plan = plan_sync(_cfg(), live_accounts, [], prune=False)
+    client = RecordingClient()
+    summary = apply_plan(client, plan, prune=False)
+
+    # accounts created + renamed go through the web CRUD route
+    web = [c for c in client.calls if c[0] == "web_json"]
+    assert any(m == "POST" and p == "double-entry/chart-of-accounts" for _, m, p, _ in web)
+    assert any(m == "PATCH" and p.startswith("double-entry/chart-of-accounts/") for _, m, p, _ in web)
+    # first account to create (config order 628, 310, 850) carries code/name/type_id as strings
+    create_form = next(f for _, m, p, f in web if m == "POST")
+    assert create_form["code"] == "628"
+    assert create_form["name"] == "Other / Uncategorized"
+    assert create_form["type_id"] == "12"
+    assert create_form["is_sub_account"] == "false"
+
+    # categories created via /api POST with derived type
+    cat_posts = [c for c in client.calls if c[0] == "post" and c[1] == "categories"]
+    types = {c[2]["name"]: c[2]["type"] for c in cat_posts}
+    assert types["API Subscription Revenue"] == "income"
+    assert types["Other / Uncategorized"] == "expense"
+    assert types["Owners Draw"] == "other"
+
+    assert summary["accounts_created"] == 3
+    assert summary["accounts_renamed"] == 1
+    assert summary["categories_created"] == 3
+
+
+def test_apply_prune_disables_via_toggle_routes():
+    live_accounts = [{"id": 9, "code": 999, "name": "Legacy", "type_id": 12, "enabled": 1}]
+    live_categories = [{"id": 20, "name": "Legacy Cat", "type": "expense", "enabled": 1}]
+    plan = plan_sync(_cfg(), live_accounts, live_categories, prune=True)
+    client = RecordingClient()
+    summary = apply_plan(client, plan, prune=True)
+    # account disable -> web GET disable route; category disable -> api GET disable
+    assert ("web_json", "GET", "double-entry/chart-of-accounts/9/disable", {}) in client.calls
+    assert ("get", "categories/20/disable") in client.calls
+    assert summary["accounts_disabled"] == 1 and summary["categories_disabled"] == 1
