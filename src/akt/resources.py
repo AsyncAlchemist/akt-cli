@@ -32,6 +32,7 @@ class Field:
     default: Any = None             # default applied on create when omitted
     is_flag: bool = False           # store_true boolean flag
     choices: list[str] | None = None
+    local: bool = False             # CLI flag only; never sent in the request body
 
 
 def f(name: str, help: str = "", **kw) -> Field:
@@ -205,6 +206,8 @@ def body_from_fields(res: Resource, ns: Any, *, for_update: bool,
     """
     body: dict[str, Any] = {}
     for fld in res.fields:
+        if fld.local:
+            continue
         val = getattr(ns, fld.dest, None)
         if fld.is_flag:
             # tri-state: only include if explicitly toggled
