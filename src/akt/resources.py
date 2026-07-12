@@ -441,9 +441,15 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
     account_ref = getattr(ns, "account", None)
     category_ref = getattr(ns, "category", None)
     de_account_id = None
-    if coa is not None and (account_ref or category_ref):
-        de_account_id, category_id = resolve_coding(
+    if account_ref or category_ref:
+        if coa is None:
+            raise ValueError(
+                "--account/--category require a COA config (pass --coa FILE or set AKT_COA_FILE)")
+        coa_de_account_id, coa_category_id = resolve_coding(
             coa, client, account_ref=account_ref, category_ref=category_ref)
+        de_account_id = coa_de_account_id
+        if category_id is None:            # explicit --category-id wins
+            category_id = coa_category_id
 
     if invoice_id:
         document = client.show("documents", invoice_id, type_scope="invoice")

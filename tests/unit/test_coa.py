@@ -492,3 +492,27 @@ def test_payment_create_no_coa_flag_is_legacy():
     body = build_payment_create(PAYMENT, client, _payment_ns(category_id=2))
     assert "de_account_id" not in body          # untouched
     assert body["category_id"] == 2
+
+
+def test_payment_create_explicit_category_id_wins_over_coa():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.account": "1"})
+    body = build_payment_create(PAYMENT, client,
+                                _payment_ns(account="400", category_id=99))
+    assert body["category_id"] == 99            # explicit --category-id wins over coa
+    assert body["de_account_id"] == 47           # de_account_id still comes from coa
+
+
+def test_payment_create_coding_flag_without_coa_config_errors():
+    ns = _payment_ns(account="400")
+    ns._coa = None
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.account": "1"})
+    with pytest.raises(ValueError, match="COA config"):
+        build_payment_create(PAYMENT, client, ns)
+
+
+def test_resolve_mirror_false_account_errors_clearly():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    with pytest.raises(ValueError, match="mirror=false"):
+        resolve_coding(_cfg(), client, account_ref="850", category_ref=None)
