@@ -150,6 +150,15 @@ akt tax create --name "Sales Tax" --rate 8.25
 akt bank create --name "Business Checking" --number 1001 --currency-code USD
 akt bank list
 
+# Open a book with a prior-period opening balance. The Double-Entry module
+# auto-posts an opening-balance journal entry dated to the account's creation
+# date; --opening-balance-date re-dates it to the period boundary so it lands in
+# the right financial year. Needs a positive --opening-balance.
+akt bank create --name "Business Checking" --number 1001 --currency-code USD \
+    --opening-balance 5000 --opening-balance-date 2024-12-31
+# Re-date the opening entry of an existing account:
+akt bank update 3 --opening-balance-date 2024-12-31
+
 # Invoice with line items (totals computed server-side; number auto-generated)
 akt invoice create --contact 12 \
     --item 'name=Consulting,price=150,quantity=10,item_id=2' \
