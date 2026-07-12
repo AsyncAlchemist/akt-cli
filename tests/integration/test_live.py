@@ -124,6 +124,34 @@ def test_standalone_income_payment(akt, tracker):
     assert _amount(p) == 33.33
 
 
+def test_bank_opening_balance_date_redates_journal_entry(akt, tracker):
+    # Requires the Double-Entry module; skip if the journal-entry API isn't there.
+    probe = akt("journal-entry", "list", raw=True)
+    if probe.returncode != 0:
+        pytest.skip("Double-Entry module not available on this instance")
+
+    name = f"AKT-IT OB Bank {RID}"
+    bank = akt("bank", "create", "--name", name, "--number", f"OB{RID}",
+               "--currency-code", "USD", "--opening-balance", "500",
+               "--opening-balance-date", "2024-12-31")
+    tracker("bank", bank["id"])
+
+    jes = akt("journal-entry", "list", "--all")
+    je = next(
+        (j for j in jes
+         if str(j.get("reference") or "").startswith("opening-balance:")
+         and str(j.get("description") or "").endswith(";" + name)),
+        None,
+    )
+    if je is None:
+        pytest.skip("no opening-balance JE created "
+                    "(owners-contribution account not configured)")
+    tracker("journal-entry", je["id"])
+
+    assert str(je["paid_at"]).startswith("2024-12-31")   # re-dated to the period boundary
+    assert je["journal_number"]                          # backfilled, non-empty
+
+
 # --------------------------------------------------------------------------
 # purchase flow: vendor -> bill -> payment -> paid
 # --------------------------------------------------------------------------
