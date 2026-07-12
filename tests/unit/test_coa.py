@@ -137,3 +137,96 @@ def test_load_coa_reads_explicit_path(tmp_path):
 def test_load_coa_explicit_missing_raises(tmp_path):
     with pytest.raises(ValueError, match="not found"):
         load_coa(str(tmp_path / "nope.toml"))
+
+
+def test_load_coa_env_var_reads_file(tmp_path, monkeypatch):
+    p = tmp_path / "env-coa.toml"
+    p.write_text(_MINIMAL)
+    monkeypatch.setenv("AKT_COA_FILE", str(p))
+    monkeypatch.chdir(tmp_path)                        # no ./coa.toml here
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # no ~/.config/akt/coa.toml
+    cfg = load_coa()
+    assert cfg is not None and cfg.by_code(400).name == "API Subscription Revenue"
+
+
+def test_load_coa_env_var_missing_falls_through_to_cwd(tmp_path, monkeypatch):
+    monkeypatch.setenv("AKT_COA_FILE", str(tmp_path / "nope.toml"))
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    (cwd / "coa.toml").write_text(_MINIMAL)
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cfg = load_coa()
+    assert cfg is not None and cfg.by_code(400).name == "API Subscription Revenue"
+
+
+def test_load_coa_env_var_missing_and_no_fallback_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("AKT_COA_FILE", str(tmp_path / "nope.toml"))
+    cwd = tmp_path / "work"
+    cwd.mkdir()                                         # no ./coa.toml here
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))   # no ~/.config/akt/coa.toml
+    assert load_coa() is None
+
+
+def test_load_coa_discovers_cwd_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("AKT_COA_FILE", raising=False)
+    (tmp_path / "coa.toml").write_text(_MINIMAL)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cfg = load_coa()
+    assert cfg is not None and cfg.by_code(400).name == "API Subscription Revenue"
+
+
+def test_load_coa_discovers_home_config_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("AKT_COA_FILE", raising=False)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)   # no ./coa.toml here
+    home = tmp_path / "home"
+    config_dir = home / ".config" / "akt"
+    config_dir.mkdir(parents=True)
+    (config_dir / "coa.toml").write_text(_MINIMAL)
+    monkeypatch.setenv("HOME", str(home))
+    cfg = load_coa()
+    assert cfg is not None and cfg.by_code(400).name == "API Subscription Revenue"
+
+
+def test_load_coa_precedence_explicit_beats_env(tmp_path, monkeypatch):
+    explicit = tmp_path / "explicit.toml"
+    explicit.write_text('[[account]]\ncode = 111\nname = "Explicit"\ntype_id = 13\n')
+    env_file = tmp_path / "env.toml"
+    env_file.write_text('[[account]]\ncode = 222\nname = "Env"\ntype_id = 13\n')
+    monkeypatch.setenv("AKT_COA_FILE", str(env_file))
+    cfg = load_coa(str(explicit))
+    assert cfg is not None
+    assert cfg.by_code(111) is not None    # explicit file won
+    assert cfg.by_code(222) is None        # env file was not read
+
+
+def test_load_coa_precedence_env_beats_cwd(tmp_path, monkeypatch):
+    env_file = tmp_path / "env.toml"
+    env_file.write_text('[[account]]\ncode = 222\nname = "Env"\ntype_id = 13\n')
+    monkeypatch.setenv("AKT_COA_FILE", str(env_file))
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    (cwd / "coa.toml").write_text('[[account]]\ncode = 333\nname = "Cwd"\ntype_id = 13\n')
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cfg = load_coa()
+    assert cfg is not None
+    assert cfg.by_code(222) is not None    # env file won
+    assert cfg.by_code(333) is None        # cwd file was not read
+
+
+def test_by_name_known_and_unknown():
+    cfg = parse_coa(_MINIMAL)
+    acct = cfg.by_name("API Subscription Revenue")
+    assert acct is not None and acct.code == 400
+    assert cfg.by_name("Nonexistent Account") is None
+
+
+def test_by_code_and_by_category_none_when_absent():
+    cfg = parse_coa(_MINIMAL)
+    assert cfg.by_code(9999) is None
+    assert cfg.by_category("Nonexistent Category") is None
