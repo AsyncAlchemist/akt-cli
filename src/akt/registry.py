@@ -220,6 +220,11 @@ PAYMENT = Resource(
         f("type", "income | expense", choices=["income", "expense"]),
         f("invoice", "Invoice id to apply an income payment to"),
         f("bill", "Bill id to apply an expense payment to"),
+        f("account", "GL/chart-of-accounts code or name to post to (the double-entry "
+                     "account — NOT the bank --account-id). Requires a --coa config; "
+                     "auto-fills the mirrored category."),
+        f("category", "Mirror category name to post under (requires a --coa config); "
+                      "auto-fills the corresponding GL account."),
         f("document-id", "Linked document id (advanced)"),
         f("contact-id", "Contact id"),
         f("amount", "Payment amount"),

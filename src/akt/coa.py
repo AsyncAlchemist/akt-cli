@@ -251,3 +251,44 @@ def apply_plan(client, plan: "CoaPlan", *, prune: bool) -> dict:
             summary["categories_disabled"] += 1
 
     return summary
+
+
+def _find_account(config: CoaConfig, ref: str) -> CoaAccount:
+    acct = config.by_code(int(ref)) if str(ref).lstrip("-").isdigit() else config.by_name(ref)
+    if acct is None:
+        raise ValueError(f"account {ref!r} is not in the COA config")
+    return acct
+
+
+def resolve_coding(config: CoaConfig, client, *, account_ref: str | None,
+                   category_ref: str | None) -> tuple[int, int]:
+    """Resolve --account / --category to live (de_account_id, category_id).
+
+    Both flags (if given) must resolve to the same config account. The account
+    and its mirror category must already exist in Akaunting (run `coa sync`)."""
+    acct = None
+    if account_ref is not None:
+        acct = _find_account(config, account_ref)
+    if category_ref is not None:
+        by_cat = config.by_category(category_ref)
+        if by_cat is None:
+            raise ValueError(f"category {category_ref!r} is not in the COA config")
+        if acct is not None and by_cat.code != acct.code:
+            raise ValueError(
+                f"--account and --category disagree: {account_ref!r} -> {acct.code}, "
+                f"{category_ref!r} -> {by_cat.code}")
+        acct = by_cat
+
+    live_accounts = client.list("chart-of-accounts", all_pages=True)
+    de_id = next((a["id"] for a in live_accounts if int(a.get("code", -1)) == acct.code), None)
+    if de_id is None:
+        raise ValueError(f"account {acct.code} ({acct.name}) is not in Akaunting yet — "
+                         f"run `akt coa sync` first")
+    live_categories = client.list("categories", all_pages=True)
+    cat_id = next((c["id"] for c in live_categories
+                   if c.get("name") == acct.category and c.get("type") == acct.category_type),
+                  None)
+    if cat_id is None:
+        raise ValueError(f"mirror category {acct.category!r} [{acct.category_type}] is not in "
+                         f"Akaunting yet — run `akt coa sync` first")
+    return int(de_id), int(cat_id)
