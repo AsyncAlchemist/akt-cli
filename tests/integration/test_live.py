@@ -383,12 +383,13 @@ def test_journal_entry_rejects_imbalance(akt):
 
 
 # --------------------------------------------------------------------------
-# COA config: `coa sync` creates an account + mirror category; a coded
-# payment lands on both.
+# COA config: `coa sync` creates an account + its mirror category; coding a
+# payment by --account or --category resolves through the config to that category.
 # --------------------------------------------------------------------------
 
 def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
-    """coa sync creates an account + mirror category; a coded payment lands on both."""
+    """coa sync creates an account + mirror category; --account and --category
+    both code a payment to that mirror category (CLI-observable contract)."""
     import json
     import subprocess
 
@@ -425,12 +426,22 @@ def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
     tracker("chart-of-account", acct["id"])
     tracker("category", cat["id"])
 
-    # a payment coded by account fills BOTH de_account_id and category_id
-    txn = run_json("payment", "create", "--type", "income", "--account-id", "1",
-                   "--amount", "0.01", "--paid-at", "2026-07-12",
-                   "--description", "coa coded smoke", "--account", "991")
-    tracker("payment", txn["id"])
-    assert str(txn["category_id"]) == str(cat["id"])
-    # de_account_id surfaces on the transaction's ledgers as the item-side account
-    assert any(int(l.get("account_id", 0)) == int(acct["id"])
-               for l in txn.get("ledgers", {}).get("data", []))
+    # Coding by --account resolves through the config and sets the mirror
+    # category. (The de_account_id -> general-ledger posting the module performs
+    # is NOT exposed on the transaction API surface — the resource carries no
+    # `ledgers`, and there is no ledger endpoint — so it cannot be asserted via
+    # the CLI; that resolution is covered by the resolve_coding unit tests.)
+    by_account = run_json("payment", "create", "--type", "income", "--account-id", "1",
+                          "--amount", "0.01", "--paid-at", "2026-07-12",
+                          "--description", "coa coded (by account)", "--account", "991")
+    tracker("payment", by_account["id"])
+    assert str(by_account["category_id"]) == str(cat["id"])
+
+    # Coding by --category (the reverse direction) resolves to the same account
+    # and sets the same mirror category.
+    by_category = run_json("payment", "create", "--type", "income", "--account-id", "1",
+                           "--amount", "0.01", "--paid-at", "2026-07-12",
+                           "--description", "coa coded (by category)",
+                           "--category", "AKT Test Revenue 991")
+    tracker("payment", by_category["id"])
+    assert str(by_category["category_id"]) == str(cat["id"])
