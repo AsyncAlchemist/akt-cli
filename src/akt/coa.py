@@ -123,17 +123,14 @@ class CoaPlan:
     accounts_create: list[CoaAccount] = field(default_factory=list)
     accounts_rename: list[tuple[CoaAccount, dict]] = field(default_factory=list)
     categories_create: list[CoaAccount] = field(default_factory=list)
-    # Always empty by design: categories are matched by (name, type) in
-    # plan_sync, so a match means there is nothing to rename.
     categories_rename: list[tuple[CoaAccount, dict]] = field(default_factory=list)
     accounts_disable: list[dict] = field(default_factory=list)
-    categories_disable: list[dict] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
         return not any([self.accounts_create, self.accounts_rename,
                         self.categories_create, self.categories_rename,
-                        self.accounts_disable, self.categories_disable])
+                        self.accounts_disable])
 
 
 def plan_sync(config: CoaConfig, live_accounts: list[dict],
@@ -152,17 +149,28 @@ def plan_sync(config: CoaConfig, live_accounts: list[dict],
         elif str(live.get("name")) != acct.name:
             plan.accounts_rename.append((acct, live))
 
+    # A renamed mirrored account's mirror category currently lives under the account's
+    # OLD name; rename it instead of creating a fresh one (which would orphan the old).
+    rename_targets = {}   # (new category, type) -> (acct, live_old_category)
+    for acct, live in plan.accounts_rename:
+        if not acct.mirror:
+            continue
+        old = live_cat.get((str(live.get("name")), acct.category_type))
+        if old is not None and old.get("name") != acct.category:
+            rename_targets[(acct.category, acct.category_type)] = (acct, old)
+
     # Mirror-category names are unique by construction (parse_coa rejects
-    # duplicate category names among mirrored accounts), so this loop can
-    # never enqueue the same categories_create entry twice.
+    # duplicate category names among mirrored accounts), so these loops can
+    # never enqueue the same categories_create/categories_rename entry twice.
     for acct in config.mirrored:
-        live = live_cat.get((acct.category, acct.category_type))
-        if live is None:
+        key = (acct.category, acct.category_type)
+        if live_cat.get(key) is not None:
+            continue                      # already correct
+        if key in rename_targets:
+            a, old = rename_targets[key]
+            plan.categories_rename.append((a, old))   # rename old -> a.category
+        else:
             plan.categories_create.append(acct)
-        # name+type already matched -> nothing to rename (name is the join key).
-        # categories_rename therefore stays empty by design: a live category is
-        # only ever matched by (name, type), so a match means there's nothing
-        # to rename — see CoaPlan.categories_rename below.
 
     if prune:
         config_codes = {a.code for a in config.accounts}
@@ -172,11 +180,6 @@ def plan_sync(config: CoaConfig, live_accounts: list[dict],
                 continue
             if int(code) not in config_codes and int(live.get("enabled", 1)) == 1:
                 plan.accounts_disable.append(live)
-        wanted_cats = {(a.category, a.category_type) for a in config.mirrored}
-        for live in live_categories:
-            key = (live.get("name"), live.get("type"))
-            if key not in wanted_cats and int(live.get("enabled", 1)) == 1:
-                plan.categories_disable.append(live)
     return plan
 
 
@@ -192,8 +195,6 @@ def render_plan(plan: CoaPlan) -> list[str]:
         lines.append(f"rename category {live.get('name')!r} -> {a.category!r}")
     for live in plan.accounts_disable:
         lines.append(f"disable account {live.get('code')} {live.get('name')!r}")
-    for live in plan.categories_disable:
-        lines.append(f"disable category {live.get('name')!r}")
     if not lines:
         lines.append("in sync — nothing to do")
     return lines
@@ -215,8 +216,8 @@ def apply_plan(client, plan: "CoaPlan", *, prune: bool) -> dict:
     """Execute the plan against Akaunting. Accounts use the web CRUD route
     (chart-of-accounts is read-only on /api); categories use /api."""
     summary = {"accounts_created": 0, "accounts_renamed": 0,
-               "categories_created": 0, "accounts_disabled": 0,
-               "categories_disabled": 0}
+               "categories_created": 0, "categories_renamed": 0,
+               "accounts_disabled": 0}
 
     for acct in plan.accounts_create:
         client.web_json("POST", "double-entry/chart-of-accounts", _account_form(acct))
@@ -236,13 +237,19 @@ def apply_plan(client, plan: "CoaPlan", *, prune: bool) -> dict:
         })
         summary["categories_created"] += 1
 
+    for acct, live in plan.categories_rename:
+        client.put(f"categories/{live['id']}", {
+            "name": acct.category,
+            "type": acct.category_type,
+            "color": live.get("color") or "#00bcd4",
+            "enabled": 1,
+        })
+        summary["categories_renamed"] += 1
+
     if prune:
         for live in plan.accounts_disable:
             client.web_json("GET", f"double-entry/chart-of-accounts/{live['id']}/disable")
             summary["accounts_disabled"] += 1
-        for live in plan.categories_disable:
-            client.get(f"categories/{live['id']}/disable")
-            summary["categories_disabled"] += 1
 
     return summary
 
