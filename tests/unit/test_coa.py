@@ -230,3 +230,11 @@ def test_by_code_and_by_category_none_when_absent():
     cfg = parse_coa(_MINIMAL)
     assert cfg.by_code(9999) is None
     assert cfg.by_category("Nonexistent Category") is None
+
+
+from akt.cli import _build_parser
+
+
+def test_coa_flag_parses_to_coa_file():
+    ns = _build_parser().parse_args(["--coa", "/tmp/chart.toml", "payment", "list"])
+    assert ns.coa_file == "/tmp/chart.toml"
