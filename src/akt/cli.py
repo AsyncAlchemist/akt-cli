@@ -254,6 +254,13 @@ def main(argv: list[str] | None = None) -> int:
         if special:
             return _run_special(special, client, ns)
 
+        if ns.resource not in BY_NOUN:
+            # command group (e.g. "coa") invoked without a verb
+            sub = next(a for a in parser._subparsers._actions  # type: ignore[attr-defined]
+                       if a.dest == "resource")
+            sub.choices[ns.resource].print_help()  # type: ignore[union-attr]
+            return 1
+
         res = BY_NOUN[ns.resource]
         handler = getattr(ns, "_handler", None)
         if handler is None:
