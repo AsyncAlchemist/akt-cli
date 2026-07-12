@@ -568,6 +568,40 @@ def test_cmd_create_invokes_post_write_hook():
     assert calls == [{"id": 99, "name": None}]   # hook saw the created record
 
 
+def test_bank_has_local_opening_balance_date_field_and_hook():
+    from akt.resources import redate_opening_balance
+    bank = BY_NOUN["bank"]
+    fld = next((f for f in bank.fields if f.name == "opening-balance-date"), None)
+    assert fld is not None
+    assert fld.dest == "opening_balance_date"
+    assert fld.local is True
+    assert bank.post_write is redate_opening_balance
+
+
+def test_bank_body_excludes_opening_balance_date():
+    """The date flag must not be POSTed to the accounts endpoint."""
+    bank = BY_NOUN["bank"]
+    ns = SimpleNamespace(
+        name="Checking", number="1001", type="bank", currency_code="USD",
+        opening_balance="500", opening_balance_date="2024-12-31",
+        bank_name=None, bank_phone=None, bank_address=None, enabled=None,
+        set_=None, data=None,
+    )
+    body = body_from_fields(bank, ns, for_update=False)
+    assert body["opening_balance"] == "500"
+    assert "opening_balance_date" not in body
+
+
+def test_bank_create_parses_opening_balance_date_flag():
+    parser = _build_parser()
+    ns = parser.parse_args(
+        ["bank", "create", "--name", "Checking", "--number", "1001",
+         "--opening-balance", "500", "--opening-balance-date", "2024-12-31"]
+    )
+    assert ns.opening_balance == "500"
+    assert ns.opening_balance_date == "2024-12-31"
+
+
 def test_body_from_fields_skips_local_fields():
     from akt.resources import Resource, f, body_from_fields
     res = Resource(noun="x", endpoint="x", fields=[
