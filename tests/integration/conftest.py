@@ -37,11 +37,11 @@ _DELETE_PRIORITY = {
     "customer": 3,
     "vendor": 3,
     "item": 4,
-    "account": 4,
+    "bank": 4,
     "category": 4,
     "tax": 4,
     "currency": 4,
-    "chart-of-account": 4,
+    "account": 4,
 }
 
 

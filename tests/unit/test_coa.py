@@ -61,7 +61,6 @@ type_id = 13
 category = "Revenue"
 """)
     assert cfg.by_code(400).category == "Revenue"
-    assert cfg.by_category("Revenue").code == 400
 
 
 def test_parse_superset_fields_ignored():
@@ -226,10 +225,9 @@ def test_by_name_known_and_unknown():
     assert cfg.by_name("Nonexistent Account") is None
 
 
-def test_by_code_and_by_category_none_when_absent():
+def test_by_code_none_when_absent():
     cfg = parse_coa(_MINIMAL)
     assert cfg.by_code(9999) is None
-    assert cfg.by_category("Nonexistent Category") is None
 
 
 from akt.cli import _build_parser
@@ -419,42 +417,27 @@ _LIVE_CATEGORIES = [
 
 def test_resolve_by_account_code():
     client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
-    de_id, cat_id = resolve_coding(_cfg(), client, account_ref="400", category_ref=None)
+    de_id, cat_id = resolve_coding(_cfg(), client, account_ref="400")
     assert (de_id, cat_id) == (47, 10)
 
 
 def test_resolve_by_account_name():
     client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
-    de_id, cat_id = resolve_coding(_cfg(), client,
-                                   account_ref="Other / Uncategorized", category_ref=None)
+    de_id, cat_id = resolve_coding(_cfg(), client, account_ref="Other / Uncategorized")
     assert (de_id, cat_id) == (61, 11)
-
-
-def test_resolve_by_category_name():
-    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
-    de_id, cat_id = resolve_coding(_cfg(), client, account_ref=None,
-                                   category_ref="API Subscription Revenue")
-    assert (de_id, cat_id) == (47, 10)
-
-
-def test_resolve_conflicting_account_and_category_errors():
-    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
-    with pytest.raises(ValueError, match="disagree"):
-        resolve_coding(_cfg(), client, account_ref="400",
-                       category_ref="Other / Uncategorized")
 
 
 def test_resolve_unknown_ref_errors():
     client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
     with pytest.raises(ValueError, match="not in the COA config"):
-        resolve_coding(_cfg(), client, account_ref="777", category_ref=None)
+        resolve_coding(_cfg(), client, account_ref="777")
 
 
 def test_resolve_account_not_synced_errors():
     # config has 310 Owners Draw but it isn't live yet
     client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
     with pytest.raises(ValueError, match="coa sync"):
-        resolve_coding(_cfg(), client, account_ref="310", category_ref=None)
+        resolve_coding(_cfg(), client, account_ref="310")
 
 
 def _payment_ns(**over):
@@ -462,7 +445,7 @@ def _payment_ns(**over):
                 contact_id=None, category_id=None, amount=1.0, account_id=1,
                 paid_at="2026-07-12", currency_code=None, currency_rate=None,
                 payment_method=None, number="TXN-1", reference=None,
-                description="x", account=None, category=None, set_=None, data=None)
+                description="x", account=None, set_=None, data=None)
     base.update(over)
     ns = SimpleNamespace(**base)
     ns._coa = _cfg()
@@ -515,4 +498,4 @@ def test_payment_create_coding_flag_without_coa_config_errors():
 def test_resolve_mirror_false_account_errors_clearly():
     client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
     with pytest.raises(ValueError, match="mirror=false"):
-        resolve_coding(_cfg(), client, account_ref="850", category_ref=None)
+        resolve_coding(_cfg(), client, account_ref="850")

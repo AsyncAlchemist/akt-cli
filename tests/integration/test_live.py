@@ -105,14 +105,14 @@ def test_currency_lifecycle(akt, tracker):
 # banking
 # --------------------------------------------------------------------------
 
-def test_account_and_transfer(akt, tracker):
+def test_bank_and_transfer(akt, tracker):
     num = f"99{RID}"
-    acct = akt("account", "create", "--name", f"AKT-IT Savings {RID}", "--number", num, "--currency-code", "USD")
-    tracker("account", acct["id"])
+    acct = akt("bank", "create", "--name", f"AKT-IT Savings {RID}", "--number", num, "--currency-code", "USD")
+    tracker("bank", acct["id"])
     assert acct["number"] == num
 
-    # transfer from the seeded default account (id 1) into the new one
-    tr = akt("transfer", "create", "--from-account-id", "1", "--to-account-id", str(acct["id"]), "--amount", "25")
+    # transfer from the seeded default bank account (id 1) into the new one
+    tr = akt("transfer", "create", "--from-bank", "1", "--to-bank", str(acct["id"]), "--amount", "25")
     tracker("transfer", tr["id"])
     assert tr.get("id")
 
@@ -289,29 +289,29 @@ def test_bill_create_with_attachment(akt, tracker, tmp_path):
 # These need the DoubleEntry module installed; tests skip gracefully if not.
 # --------------------------------------------------------------------------
 
-def _chart_accounts(akt):
+def _gl_accounts(akt):
     """Return the chart of accounts, or None if the module isn't installed."""
-    proc = akt("--json", "chart-of-account", "list", "--all", raw=True)
+    proc = akt("--json", "account", "list", "--all", raw=True)
     if proc.returncode != 0:
         return None
     import json
     return json.loads(proc.stdout)
 
 
-def test_chart_of_account_read(akt):
-    accounts = _chart_accounts(akt)
+def test_account_read(akt):
+    accounts = _gl_accounts(akt)
     if accounts is None:
         pytest.skip("DoubleEntry module not installed (chart-of-accounts unavailable)")
     if not accounts:
         pytest.skip("chart of accounts is empty")
-    one = akt("chart-of-account", "get", str(accounts[0]["id"]))
+    one = akt("account", "get", str(accounts[0]["id"]))
     assert one["id"] == accounts[0]["id"]
     assert "code" in one and "name" in one
 
 
-def test_chart_of_account_crud(akt, tracker):
+def test_account_crud(akt, tracker):
     """create/update/delete run through the session/CSRF web route, not /api."""
-    accounts = _chart_accounts(akt)
+    accounts = _gl_accounts(akt)
     if accounts is None:
         pytest.skip("DoubleEntry module not installed (chart-of-accounts unavailable)")
     # Reuse an existing account's type, but avoid bank-type accounts (module
@@ -323,24 +323,24 @@ def test_chart_of_account_crud(akt, tracker):
     type_id = reusable[0]["type_id"]
     code = int(f"9{RID}"[:8])   # unlikely-to-collide numeric code
 
-    created = akt("chart-of-account", "create",
+    created = akt("account", "create",
                   "--name", f"AKT-IT Account {RID}", "--code", str(code),
                   "--type-id", str(type_id))
-    tracker("chart-of-account", created["id"])
+    tracker("account", created["id"])
     assert created["name"].endswith(RID)
     assert int(created["code"]) == code
 
-    updated = akt("chart-of-account", "update", str(created["id"]),
+    updated = akt("account", "update", str(created["id"]),
                   "--description", "AKT-IT updated")
     assert updated["description"] == "AKT-IT updated"
     assert updated["name"] == created["name"], "web update must preserve the name"
 
-    got = akt("chart-of-account", "get", str(created["id"]))
+    got = akt("account", "get", str(created["id"]))
     assert got["id"] == created["id"]
 
 
 def test_journal_entry_lifecycle(akt, tracker):
-    accounts = _chart_accounts(akt)
+    accounts = _gl_accounts(akt)
     if accounts is None:
         pytest.skip("DoubleEntry module not installed (journal-entry unavailable)")
     if len(accounts) < 2:
@@ -384,12 +384,12 @@ def test_journal_entry_rejects_imbalance(akt):
 
 # --------------------------------------------------------------------------
 # COA config: `coa sync` creates an account + its mirror category; coding a
-# payment by --account or --category resolves through the config to that category.
+# payment by --account resolves through the config to that category.
 # --------------------------------------------------------------------------
 
 def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
-    """coa sync creates an account + mirror category; --account and --category
-    both code a payment to that mirror category (CLI-observable contract)."""
+    """coa sync creates an account + mirror category; --account codes a
+    payment to that mirror category (CLI-observable contract)."""
     import json
     import subprocess
 
@@ -419,11 +419,11 @@ def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
     # sync (idempotent) then locate the created account + category. --all so the
     # created records are found even past the first page of a populated instance.
     run_text("coa", "sync")
-    accounts = run_json("chart-of-account", "list", "--all")
+    accounts = run_json("account", "list", "--all")
     acct = next(a for a in accounts if int(a["code"]) == 991)
     cats = run_json("category", "list", "--all")
     cat = next(c for c in cats if c["name"] == "AKT Test Revenue 991" and c["type"] == "income")
-    tracker("chart-of-account", acct["id"])
+    tracker("account", acct["id"])
     tracker("category", cat["id"])
 
     # Coding by --account resolves through the config and sets the mirror
@@ -431,17 +431,8 @@ def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
     # is NOT exposed on the transaction API surface — the resource carries no
     # `ledgers`, and there is no ledger endpoint — so it cannot be asserted via
     # the CLI; that resolution is covered by the resolve_coding unit tests.)
-    by_account = run_json("payment", "create", "--type", "income", "--account-id", "1",
+    by_account = run_json("payment", "create", "--type", "income", "--bank", "1",
                           "--amount", "0.01", "--paid-at", "2026-07-12",
                           "--description", "coa coded (by account)", "--account", "991")
     tracker("payment", by_account["id"])
     assert str(by_account["category_id"]) == str(cat["id"])
-
-    # Coding by --category (the reverse direction) resolves to the same account
-    # and sets the same mirror category.
-    by_category = run_json("payment", "create", "--type", "income", "--account-id", "1",
-                           "--amount", "0.01", "--paid-at", "2026-07-12",
-                           "--description", "coa coded (by category)",
-                           "--category", "AKT Test Revenue 991")
-    tracker("payment", by_category["id"])
-    assert str(by_category["category_id"]) == str(cat["id"])

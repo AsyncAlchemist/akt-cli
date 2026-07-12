@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from akt.registry import INVOICE, BILL, PAYMENT, JOURNAL_ENTRY, CHART_OF_ACCOUNT, BY_NOUN
+from akt.registry import INVOICE, BILL, PAYMENT, JOURNAL_ENTRY, ACCOUNT, BY_NOUN
 from akt.resources import (
     parse_item,
     parse_journal_item,
@@ -376,7 +376,7 @@ def test_build_journal_update_preserves_ledgers_with_ids():
 
 
 # --------------------------------------------------------------------------
-# chart-of-accounts (web-surface CRUD) builder
+# account (GL / chart-of-accounts, web-surface CRUD) builder
 # --------------------------------------------------------------------------
 
 def _account_ns(**over):
@@ -386,16 +386,25 @@ def _account_ns(**over):
     return SimpleNamespace(**base)
 
 
-def test_chart_of_account_routes_crud_through_web():
-    assert CHART_OF_ACCOUNT.read_only is False
-    assert CHART_OF_ACCOUNT.web_endpoint == "double-entry/chart-of-accounts"
+def test_account_routes_crud_through_web():
+    assert ACCOUNT.read_only is False
+    assert ACCOUNT.web_endpoint == "double-entry/chart-of-accounts"
     # list/get stay on the /api surface
-    assert CHART_OF_ACCOUNT.endpoint == "chart-of-accounts"
+    assert ACCOUNT.endpoint == "chart-of-accounts"
+
+
+def test_account_bank_noun_swap_maps_to_correct_endpoints():
+    """Regression for the ACCOUNT<->BANK constant-rename ordering: `account`
+    must be the GL/chart-of-accounts noun and `bank` the money-account noun."""
+    assert BY_NOUN["account"].endpoint == "chart-of-accounts"
+    assert BY_NOUN["account"].web_endpoint == "double-entry/chart-of-accounts"
+    assert BY_NOUN["bank"].endpoint == "accounts"
+    assert BY_NOUN["bank"].web_endpoint is None
 
 
 def test_build_account_create_top_level():
     body = build_account_create(
-        CHART_OF_ACCOUNT, FakeClient(),
+        ACCOUNT, FakeClient(),
         _account_ns(name="Cash", code="1010", type_id="6"),
     )
     assert body["name"] == "Cash"
@@ -407,7 +416,7 @@ def test_build_account_create_top_level():
 
 def test_build_account_create_sub_account():
     body = build_account_create(
-        CHART_OF_ACCOUNT, FakeClient(),
+        ACCOUNT, FakeClient(),
         _account_ns(name="Petty Cash", code="1011", type_id="6", account_id="42"),
     )
     assert body["account_id"] == "42"
@@ -416,14 +425,14 @@ def test_build_account_create_sub_account():
 
 def test_build_account_create_requires_name():
     with pytest.raises(ValueError, match="name"):
-        build_account_create(CHART_OF_ACCOUNT, FakeClient(), _account_ns(code="1010"))
+        build_account_create(ACCOUNT, FakeClient(), _account_ns(code="1010"))
 
 
 def test_build_account_update_backfills_required_name():
     current = {"id": 5, "name": "Cash", "code": 1010, "type_id": 6,
                "account_id": None, "enabled": 1, "description": None}
     # change only the code; name (required by Akaunting on update) is resent
-    body = build_account_update(CHART_OF_ACCOUNT, FakeClient(),
+    body = build_account_update(ACCOUNT, FakeClient(),
                                 _account_ns(code="1099"), current)
     assert body["name"] == "Cash"
     assert body["code"] == "1099"
@@ -473,11 +482,16 @@ def _verbs_for(parser, noun):
     return set(vsub.choices)
 
 
-def test_chart_of_account_exposes_full_crud_no_toggle():
-    verbs = _verbs_for(_build_parser(), "chart-of-account")
+def test_account_exposes_full_crud_no_toggle():
+    verbs = _verbs_for(_build_parser(), "account")
     assert {"list", "get", "create", "update", "delete"} <= verbs
     # no enable/disable (supports_toggle=False) and no attachment verbs
     assert "enable" not in verbs and "attachments" not in verbs
+
+
+def test_bank_exposes_full_crud_with_toggle():
+    verbs = _verbs_for(_build_parser(), "bank")
+    assert {"list", "get", "create", "update", "delete", "enable", "disable"} <= verbs
 
 
 def test_journal_entry_exposes_full_crud_and_attachments():

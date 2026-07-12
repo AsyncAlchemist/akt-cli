@@ -439,14 +439,12 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
 
     coa = getattr(ns, "_coa", None)
     account_ref = getattr(ns, "account", None)
-    category_ref = getattr(ns, "category", None)
     de_account_id = None
-    if account_ref or category_ref:
+    if account_ref:
         if coa is None:
             raise ValueError(
-                "--account/--category require a COA config (pass --coa FILE or set AKT_COA_FILE)")
-        coa_de_account_id, coa_category_id = resolve_coding(
-            coa, client, account_ref=account_ref, category_ref=category_ref)
+                "--account requires a COA config (pass --coa FILE or set AKT_COA_FILE)")
+        coa_de_account_id, coa_category_id = resolve_coding(coa, client, account_ref=account_ref)
         de_account_id = coa_de_account_id
         if category_id is None:            # explicit --category-id wins
             category_id = coa_category_id
@@ -749,7 +747,7 @@ def _apply_sub_account(body: dict) -> None:
 def build_account_create(res: Resource, client: Client, ns: Any) -> dict:
     body = body_from_fields(res, ns, for_update=False)
     if not body.get("name"):
-        raise ValueError("--name is required to create a chart-of-account")
+        raise ValueError("--name is required to create an account")
     _apply_sub_account(body)
     return body
 
