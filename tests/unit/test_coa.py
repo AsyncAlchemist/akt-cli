@@ -287,14 +287,44 @@ def test_plan_no_op_when_in_sync():
                     plan.categories_create, plan.categories_rename])
 
 
+def test_plan_renames_mirror_category_when_account_renamed():
+    # live account code 400 is still named "Sales" with a live mirror category
+    # of the same old name; config renames it to "API Subscription Revenue".
+    live_accounts = [{"id": 1, "code": 400, "name": "Sales", "type_id": 13, "enabled": 1}]
+    live_categories = [{"id": 10, "name": "Sales", "type": "income", "enabled": 1}]
+    plan = plan_sync(_cfg(), live_accounts, live_categories, prune=False)
+    rename_codes = {a.code for a, _ in plan.accounts_rename}
+    assert rename_codes == {400}
+    cat_renames = {(a.code, live["name"]) for a, live in plan.categories_rename}
+    assert (400, "Sales") in cat_renames
+    assert all(a.code != 400 for a in plan.categories_create)   # not created fresh — renamed
+
+
+def test_apply_renames_mirror_category_via_put():
+    live_accounts = [{"id": 1, "code": 400, "name": "Sales", "type_id": 13, "enabled": 1}]
+    live_categories = [{"id": 10, "name": "Sales", "type": "income", "enabled": 1}]
+    plan = plan_sync(_cfg(), live_accounts, live_categories, prune=False)
+    client = RecordingClient()
+    summary = apply_plan(client, plan, prune=False)
+    puts = [c for c in client.calls if c[0] == "put" and c[1] == "categories/10"]
+    assert len(puts) == 1
+    assert puts[0][2]["name"] == "API Subscription Revenue"
+    assert puts[0][2]["type"] == "income"
+    assert summary["categories_renamed"] == 1
+
+
 def test_plan_prune_disables_extras_only_when_requested():
     live_accounts = [{"id": 9, "code": 999, "name": "Legacy", "type_id": 12, "enabled": 1}]
+    # a stray live category unmatched by any config mirror — prune must NOT touch it
+    # (categories are derived; nuking a stray one could take out product/default
+    # categories like Deposit/Transfer).
     live_categories = [{"id": 20, "name": "Legacy Cat", "type": "expense", "enabled": 1}]
     no_prune = plan_sync(_cfg(), live_accounts, live_categories, prune=False)
-    assert no_prune.accounts_disable == [] and no_prune.categories_disable == []
+    assert no_prune.accounts_disable == []
     pruned = plan_sync(_cfg(), live_accounts, live_categories, prune=True)
     assert [a["code"] for a in pruned.accounts_disable] == [999]
-    assert [c["name"] for c in pruned.categories_disable] == ["Legacy Cat"]
+    assert "Legacy Cat" not in [a.category for a in pruned.categories_create]
+    assert not any(live.get("name") == "Legacy Cat" for _, live in pruned.categories_rename)
 
 
 def test_plan_prune_ignores_already_disabled():
@@ -373,10 +403,10 @@ def test_apply_prune_disables_via_toggle_routes():
     plan = plan_sync(_cfg(), live_accounts, live_categories, prune=True)
     client = RecordingClient()
     summary = apply_plan(client, plan, prune=True)
-    # account disable -> web GET disable route; category disable -> api GET disable
+    # account disable -> web GET disable route; categories are never disabled by prune
     assert ("web_json", "GET", "double-entry/chart-of-accounts/9/disable", {}) in client.calls
-    assert ("get", "categories/20/disable") in client.calls
-    assert summary["accounts_disabled"] == 1 and summary["categories_disabled"] == 1
+    assert not any(c[0] == "get" and c[1] == "categories/20/disable" for c in client.calls)
+    assert summary["accounts_disabled"] == 1
 
 
 from types import SimpleNamespace
