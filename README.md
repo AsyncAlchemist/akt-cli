@@ -193,6 +193,38 @@ akt journal-entry create --description "Vendor bill accrual" --basis accrual \
     --item 'account_id=60,debit=250' --item 'account_id=21,credit=250' \
     --attachment ./invoice.pdf
 
+## COA config: link categories and accounts (Xero-style)
+
+Akaunting keeps *categories* (required on every transaction) separate from the
+double-entry *chart of accounts*. Point akt at a COA config and it keeps them in
+lockstep: one list to maintain (accounts), a 1:1 mirror of categories generated
+from it, and `payment create` coded by either — with the other side filled in.
+
+akt finds the config at `--coa FILE` → `AKT_COA_FILE` → `./coa.toml` →
+`~/.config/akt/coa.toml`. Minimal schema (extra keys are ignored):
+
+```toml
+[[account]]
+code    = 400
+name    = "API Subscription Revenue"
+type_id = 13            # DoubleEntry account type; income/expense class -> category type
+# optional: category = "Revenue"   (override the mirror name)
+# optional: mirror   = false        (skip mirroring, e.g. bank/AR/AP accounts)
+```
+
+```bash
+akt coa diff                 # preview: accounts/categories to create or rename
+akt coa sync                 # apply (create + rename; idempotent)
+akt coa sync --prune         # also DISABLE accounts/categories absent from the config
+
+# code a transaction by GL account OR by category — akt fills the other:
+akt payment create --type expense --account-id 1 --amount 120 --account 628
+akt payment create --type income  --account-id 1 --amount 500 --category "API Subscription Revenue"
+```
+
+`--account` takes a GL code or name (the double-entry account — not the bank
+`--account-id`). An explicit `--set de_account_id=` still wins.
+
 # Anything else: raw API access
 akt raw GET reports
 akt raw POST items --data '{"name":"Ad-hoc","type":"service","sale_price":99}'
