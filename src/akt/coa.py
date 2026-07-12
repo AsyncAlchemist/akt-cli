@@ -122,3 +122,76 @@ def load_coa(path: str | None = None) -> CoaConfig | None:
         if f.is_file():
             return parse_coa(f.read_text())
     return None
+
+
+@dataclass
+class CoaPlan:
+    accounts_create: list[CoaAccount] = field(default_factory=list)
+    accounts_rename: list[tuple[CoaAccount, dict]] = field(default_factory=list)
+    categories_create: list[CoaAccount] = field(default_factory=list)
+    categories_rename: list[tuple[CoaAccount, dict]] = field(default_factory=list)
+    accounts_disable: list[dict] = field(default_factory=list)
+    categories_disable: list[dict] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not any([self.accounts_create, self.accounts_rename,
+                        self.categories_create, self.categories_rename,
+                        self.accounts_disable, self.categories_disable])
+
+
+def plan_sync(config: CoaConfig, live_accounts: list[dict],
+              live_categories: list[dict], *, prune: bool) -> CoaPlan:
+    """Diff the config against live Akaunting data. Pure: no I/O."""
+    plan = CoaPlan()
+    live_by_code = {int(a["code"]): a for a in live_accounts if a.get("code") is not None}
+    # (name, type) -> live category, so a same-named category of another type
+    # never gets clobbered.
+    live_cat = {(c.get("name"), c.get("type")): c for c in live_categories}
+
+    for acct in config.accounts:
+        live = live_by_code.get(acct.code)
+        if live is None:
+            plan.accounts_create.append(acct)
+        elif str(live.get("name")) != acct.name:
+            plan.accounts_rename.append((acct, live))
+
+    for acct in config.mirrored:
+        live = live_cat.get((acct.category, acct.category_type))
+        if live is None:
+            plan.categories_create.append(acct)
+        # name+type already matched -> nothing to rename (name is the join key)
+
+    if prune:
+        config_codes = {a.code for a in config.accounts}
+        for live in live_accounts:
+            code = live.get("code")
+            if code is None:
+                continue
+            if int(code) not in config_codes and int(live.get("enabled", 1)) == 1:
+                plan.accounts_disable.append(live)
+        wanted_cats = {(a.category, a.category_type) for a in config.mirrored}
+        for live in live_categories:
+            key = (live.get("name"), live.get("type"))
+            if key not in wanted_cats and int(live.get("enabled", 1)) == 1:
+                plan.categories_disable.append(live)
+    return plan
+
+
+def render_plan(plan: CoaPlan) -> list[str]:
+    lines: list[str] = []
+    for a in plan.accounts_create:
+        lines.append(f"create account {a.code} {a.name} (type_id {a.type_id})")
+    for a, live in plan.accounts_rename:
+        lines.append(f"rename account {a.code}: {live.get('name')!r} -> {a.name!r}")
+    for a in plan.categories_create:
+        lines.append(f"create category {a.category!r} [{a.category_type}]")
+    for a, live in plan.categories_rename:
+        lines.append(f"rename category {live.get('name')!r} -> {a.category!r}")
+    for live in plan.accounts_disable:
+        lines.append(f"disable account {live.get('code')} {live.get('name')!r}")
+    for live in plan.categories_disable:
+        lines.append(f"disable category {live.get('name')!r}")
+    if not lines:
+        lines.append("in sync — nothing to do")
+    return lines
