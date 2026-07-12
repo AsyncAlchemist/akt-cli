@@ -21,6 +21,7 @@ from .commands import (
 from .output import emit
 from .registry import RESOURCES, BY_NOUN
 from .resources import Resource, load_data_arg
+from .coa import load_coa
 
 
 def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bool) -> None:
@@ -84,6 +85,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         metavar="SECONDS",
                         help="Min seconds between API calls (or AKT_THROTTLE). "
                              "Use a value like 1.0 to avoid tripping host bot-protection.")
+    parser.add_argument("--coa", dest="coa_file", default=None, metavar="FILE",
+                        help="COA config for category<->account linking "
+                             "(or AKT_COA_FILE / ./coa.toml / ~/.config/akt/coa.toml)")
 
     sub = parser.add_subparsers(dest="resource", metavar="<resource>")
 
@@ -215,6 +219,12 @@ def main(argv: list[str] | None = None) -> int:
     if throttle is None:
         throttle = float(os.environ.get("AKT_THROTTLE", "0") or 0)
     client = Client(config, throttle=throttle)
+
+    try:
+        ns._coa = load_coa(getattr(ns, "coa_file", None))
+    except (ValueError, OSError) as e:
+        print(f"coa config error: {e}", file=sys.stderr)
+        return 2
 
     try:
         special = getattr(ns, "_special", None)
