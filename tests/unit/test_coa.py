@@ -240,6 +240,17 @@ def test_coa_flag_parses_to_coa_file():
     assert ns.coa_file == "/tmp/chart.toml"
 
 
+def test_coa_group_no_verb_falls_to_help_guard():
+    """`akt coa` (no verb) must fall to main()'s no-verb-help guard, not the
+    BY_NOUN dispatch — regression for the KeyError crash."""
+    from akt.registry import BY_NOUN
+    ns = _build_parser().parse_args(["coa"])
+    assert ns.resource == "coa"
+    assert ns.resource not in BY_NOUN                 # not a resource noun
+    assert getattr(ns, "_special", None) is None       # bare group sets no _special
+    assert getattr(ns, "_handler", None) is None       # and no verb handler
+
+
 from akt.coa import CoaPlan, plan_sync, render_plan
 
 
