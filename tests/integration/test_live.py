@@ -415,11 +415,12 @@ def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
         assert proc.returncode == 0, proc.stderr
         return proc.stdout
 
-    # sync (idempotent) then locate the created account + category
+    # sync (idempotent) then locate the created account + category. --all so the
+    # created records are found even past the first page of a populated instance.
     run_text("coa", "sync")
-    accounts = run_json("chart-of-account", "list")
+    accounts = run_json("chart-of-account", "list", "--all")
     acct = next(a for a in accounts if int(a["code"]) == 991)
-    cats = run_json("category", "list")
+    cats = run_json("category", "list", "--all")
     cat = next(c for c in cats if c["name"] == "AKT Test Revenue 991" and c["type"] == "income")
     tracker("chart-of-account", acct["id"])
     tracker("category", cat["id"])
