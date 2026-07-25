@@ -43,25 +43,45 @@ GET /api/akt/ledgers
 
 ## Install
 
+### Automated (recommended)
+
+Use the repeatable deploy script (`scripts/deploy-akt-api.sh` in the akt repo) —
+it rsyncs the module, enables it, clears caches, verifies the endpoint,
+health-checks the app, and rolls back on failure:
+
+```bash
+AKT_EMAIL=… AKT_PASSWORD=… scripts/deploy-akt-api.sh
+```
+
+Config via env vars (defaults shown): `AKT_API_SSH_HOST=akaunting-host`,
+`AKT_API_REMOTE=akaunting`, `AKT_API_COMPANY=1`,
+`AKT_API_APP_URL=https://akaunting.example.com`.
+
+### Manual
+
 1. Copy this directory into your Akaunting install as **`modules/AktApi`** — the
    directory name must be `AktApi` (StudlyCase) so Akaunting autoloads the
    `Modules\AktApi\` namespace:
 
    ```bash
-   cp -r akt-api /path/to/akaunting/modules/AktApi
+   rsync -az akt-api/ /path/to/akaunting/modules/AktApi/
    ```
 
-2. Enable it (any one of):
-   - **Apps → My Apps** in the Akaunting UI, or
-   - `php artisan module:enable AktApi`, or
-   - add `"akt-api": {"enabled": true}` to `modules_statuses.json` at the
-     Akaunting root.
-
-3. Clear the route cache:
+2. Enable it. Akaunting tracks module status per-company in the `modules` DB
+   table; the canonical command takes the **alias** (`akt`) and a company id,
+   then clear caches:
 
    ```bash
-   php artisan route:clear
+   php artisan module:enable akt 1
+   php artisan cache:clear && php artisan config:clear && php artisan route:clear
    ```
+
+   (Or **Apps → My Apps** in the UI.)
+
+> **Why the alias is `akt`, not `akt-api`.** The core `Route::api($alias, …)`
+> macro uses the alias *both* as the URL prefix and to resolve the module's
+> controller namespace (`module($alias)->getStudlyName()`). So the alias must
+> equal the `akt` in `/api/akt/ledgers`; the install directory stays `AktApi`.
 
 ## Verify
 
