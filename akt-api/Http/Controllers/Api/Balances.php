@@ -20,16 +20,22 @@ class Balances extends ApiController
      * Per-account debit/credit totals over an optional date window (inclusive,
      * on the calendar date of issued_at). One row per account.
      *
-     * Aggregates through the DoubleEntry Ledger model's `ledgerable` relation and
-     * skips rows whose ledgerable no longer exists (soft-deleted transactions /
-     * documents leave orphaned ledger rows behind). This matches how Akaunting's
-     * own reports read the ledger; a raw table sum would double-count orphans.
+     * Orphaned rows — those whose polymorphic `ledgerable` (a transaction,
+     * document, journal, …) has been soft-deleted or removed — must be excluded,
+     * exactly as Akaunting's own reports do; a raw table sum would double-count
+     * them. We express that as an EXISTS-per-morph-type filter (`whereHasMorph`
+     * with the `*` wildcard), which honors each target's SoftDeletes scope. That
+     * yields the same set as hydrating every row and dropping null ledgerables,
+     * but resolves to a single GROUP BY aggregate instead of loading thousands
+     * of models into PHP on every call.
      *
      * @return \Illuminate\Http\JsonResponse
      */
     public function index(Request $request)
     {
-        $query = Ledger::where('company_id', company_id());
+        $query = Ledger::without('ledgerable')      // aggregate rows carry no ledgerable to eager-load
+            ->where('company_id', company_id())
+            ->whereHasMorph('ledgerable', '*');     // drop orphans in SQL (soft-deleted/missing targets)
 
         if ($request->filled('date_from')) {
             $query->whereDate('issued_at', '>=', $request->input('date_from'));
@@ -38,23 +44,11 @@ class Balances extends ApiController
             $query->whereDate('issued_at', '<=', $request->input('date_to'));
         }
 
-        $totals = [];
-        $query->with('ledgerable')->chunkById(2000, function ($rows) use (&$totals) {
-            foreach ($rows as $l) {
-                if ($l->ledgerable === null) {
-                    continue;   // orphaned (soft-deleted/missing) — excluded, as Akaunting does
-                }
-                $aid = (int) $l->account_id;
-                if (! isset($totals[$aid])) {
-                    $totals[$aid] = (object) ['account_id' => $aid, 'debit' => 0.0, 'credit' => 0.0];
-                }
-                $totals[$aid]->debit += (float) $l->debit;
-                $totals[$aid]->credit += (float) $l->credit;
-            }
-        });
+        $rows = $query->groupBy('account_id')
+            ->orderBy('account_id')
+            ->selectRaw('account_id, COALESCE(SUM(debit), 0) as debit, COALESCE(SUM(credit), 0) as credit')
+            ->get();
 
-        ksort($totals);
-
-        return Resource::collection(collect(array_values($totals)));
+        return Resource::collection($rows);
     }
 }
