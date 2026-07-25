@@ -23,7 +23,7 @@ from .registry import RESOURCES, BY_NOUN
 from .resources import Resource, load_data_arg
 from .coa import load_coa, plan_sync, render_plan, apply_plan
 from .ledger import resolve_account_id
-from .verify import find_miscodings, build_recode_plan
+from .verify import find_miscodings, find_report_dropped, build_recode_plan
 from . import reports
 
 
@@ -346,7 +346,8 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
         categories_by_id = {c["id"]: {"name": c.get("name"), "type": c.get("type")}
                             for c in client.list("categories", all_pages=True)}
         accounts = client.list("chart-of-accounts", all_pages=True)
-        accounts_by_id = {a["id"]: {"code": a.get("code"), "name": a.get("name")} for a in accounts}
+        accounts_by_id = {a["id"]: {"code": a.get("code"), "name": a.get("name"),
+                                    "type_id": a.get("type_id")} for a in accounts}
         accounts_by_code = {int(a["code"]): a["id"] for a in accounts if a.get("code") is not None}
 
         item_ledgers = client.list("akt-api/ledgers", all_pages=True, params={
@@ -355,6 +356,9 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
 
         findings = find_miscodings(txns, categories_by_id, accounts_by_id,
                                    accounts_by_code, item_account_by_txn, coa)
+        # Also flag postings the COA report silently drops (txn type vs account
+        # class mismatch — e.g. a refund booked as income onto an expense account).
+        findings += find_report_dropped(txns, item_account_by_txn, accounts_by_id)
         cols = ["transaction_id", "paid_at", "amount", "category",
                 "expected_code", "actual_code", "reason"]
         emit(findings, as_json=ns.json, columns=None if ns.json else cols,

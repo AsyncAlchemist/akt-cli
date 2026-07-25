@@ -3,6 +3,46 @@ posted GL account vs the COA mirror of its category."""
 from __future__ import annotations
 
 from .coa import CoaConfig
+from .reports import account_class
+
+# GL account class (from reports.account_class) -> the transaction type Akaunting's
+# DoubleEntry COA P&L report requires for a posting to that account to be counted.
+_CLASS_EXPECTS_TYPE = {3: "expense", 4: "income"}
+
+
+def find_report_dropped(transactions: list[dict], item_account_by_txn: dict[int, int],
+                        accounts_by_id: dict[int, dict]) -> list[dict]:
+    """Flag standalone transactions Akaunting's COA P&L report silently DROPS.
+
+    The DoubleEntry report has a type-guard: a posting is counted only when the
+    backing transaction's type matches the GL account's class. So an *income*
+    transaction posted to an *expense* account (a refund/reversal booked as income),
+    or an *expense* transaction on an *income* account, is ignored — its amount
+    never reaches the P&L even though the ledger balances. The correct vehicle for
+    an expense refund / income reversal is a **journal entry**, which the report
+    nets. Pure — all lookups pre-fetched; accounts_by_id values must carry type_id."""
+    findings: list[dict] = []
+    for t in transactions:
+        ttype = t.get("type")
+        if ttype not in ("income", "expense"):
+            continue
+        acct = accounts_by_id.get(item_account_by_txn.get(t["id"]))
+        if not acct:
+            continue
+        expects = _CLASS_EXPECTS_TYPE.get(account_class(acct.get("type_id")))
+        if expects is None or ttype == expects:
+            continue                                   # not a P&L account, or types agree
+        findings.append({
+            "transaction_id": t["id"],
+            "paid_at": str(t.get("paid_at", ""))[:10],
+            "amount": t.get("amount"),
+            "category": None,
+            "expected_code": None,
+            "actual_code": acct.get("code"),
+            "reason": f"{ttype} txn posts to {expects}-class account {acct.get('code')} — "
+                      "COA report silently drops this; book as a journal entry",
+        })
+    return findings
 
 
 def find_miscodings(transactions: list[dict], categories_by_id: dict[int, dict],

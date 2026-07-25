@@ -77,3 +77,28 @@ def test_build_recode_plan_targets_only_wrong_item_legs():
     p = plan[0]
     assert p["ledger_id"] == 500 and p["transaction_id"] == 1
     assert p["from_code"] == 628 and p["to_code"] == 615 and p["to_account_id"] == 90
+
+
+# --- find_report_dropped: postings the COA report silently ignores ---
+from akt.verify import find_report_dropped  # noqa: E402
+
+
+def test_find_report_dropped_flags_type_class_mismatch():
+    accounts = {91: {"code": 530, "name": "Hosting", "type_id": 11},   # expense class
+                40: {"code": 400, "name": "Revenue", "type_id": 13}}   # income class
+    txns = [{"id": 1, "type": "income", "paid_at": "2025-11-23", "amount": 247.5},   # refund-as-income on expense acct
+            {"id": 2, "type": "expense", "paid_at": "2025-06-01", "amount": 10.0},   # expense on expense acct -> ok
+            {"id": 3, "type": "expense", "paid_at": "2025-06-01", "amount": 5.0}]    # expense on income acct -> flag
+    item_account_by_txn = {1: 91, 2: 91, 3: 40}
+    findings = find_report_dropped(txns, item_account_by_txn, accounts)
+    assert {f["transaction_id"] for f in findings} == {1, 3}
+    assert all("journal entry" in f["reason"] for f in findings)
+    assert findings[0]["actual_code"] == 530
+
+
+def test_find_report_dropped_ignores_non_pnl_and_matches():
+    accounts = {91: {"code": 530, "name": "Hosting", "type_id": 12},   # expense
+                10: {"code": 105, "name": "Checking", "type_id": 6}}   # asset -> not P&L
+    txns = [{"id": 1, "type": "expense", "paid_at": "2025-06-01", "amount": 10.0},   # ok
+            {"id": 2, "type": "income", "paid_at": "2025-06-01", "amount": 10.0}]    # asset acct -> ignore
+    assert find_report_dropped(txns, {1: 91, 2: 10}, accounts) == []
