@@ -10,14 +10,14 @@ Akaunting's DoubleEntry app publishes only `journal-entry` and
 transaction's postings live) has no endpoint. This module adds one:
 
 ```
-GET /api/akt/ledgers
+GET /api/akt-api/ledgers
 ```
 
 ## What it does
 
-- Registers a single read-only route, `GET /api/akt/ledgers`, namespaced under
-  `/api/akt/` (via the core `Route::api('akt', …)` macro) so it can never
-  collide with core or other modules' routes.
+- Registers a single read-only route, `GET /api/akt-api/ledgers` (via the core
+  `Route::api('akt-api', …)` macro), namespaced under `/api/akt-api/` so it can
+  never collide with core or other modules' routes.
 - Reads the `double_entry_ledger` table via the query builder only — it does
   **not** import or modify any DoubleEntry code, so it survives DoubleEntry
   updates. (It couples only to that table's column names.)
@@ -68,26 +68,30 @@ Config via env vars (defaults shown): `AKT_API_SSH_HOST=akaunting-host`,
    ```
 
 2. Enable it. Akaunting tracks module status per-company in the `modules` DB
-   table; the canonical command takes the **alias** (`akt`) and a company id,
-   then clear caches:
+   table; the canonical command takes the **alias** (`akt-api`) and a company id.
+   **Clear caches first** — Akaunting caches the scanned-modules list, so a
+   freshly-copied module is invisible to `module:enable` until the cache is
+   flushed:
 
    ```bash
-   php artisan module:enable akt 1
    php artisan cache:clear && php artisan config:clear && php artisan route:clear
+   php artisan module:enable akt-api 1
+   php artisan route:clear
    ```
 
-   (Or **Apps → My Apps** in the UI.)
+   (Or **Apps → My Apps** in the UI. Or just use the deploy script above.)
 
-> **Why the alias is `akt`, not `akt-api`.** The core `Route::api($alias, …)`
-> macro uses the alias *both* as the URL prefix and to resolve the module's
-> controller namespace (`module($alias)->getStudlyName()`). So the alias must
-> equal the `akt` in `/api/akt/ledgers`; the install directory stays `AktApi`.
+> **Why the alias is `akt-api`.** The core `Route::api($alias, …)` macro uses the
+> alias as the `/api/<alias>/` URL prefix **and** to build the controller
+> namespace as `Modules\<Str::studly($alias)>\…`. `Str::studly('akt-api')` =
+> `AktApi`, which matches this module's namespace *and* its install directory
+> (`modules/AktApi`). So the alias, the studly name, and the directory all agree.
 
 ## Verify
 
 ```bash
 curl -s -u "$AKT_EMAIL:$AKT_PASSWORD" \
-  "$APP_URL/api/akt/ledgers?company_id=1&entry_type=item&limit=3"
+  "$APP_URL/api/akt-api/ledgers?company_id=1&entry_type=item&limit=3"
 ```
 
 A `200` with a `data` array means it's live. A `404` means the module isn't

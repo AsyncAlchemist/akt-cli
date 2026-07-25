@@ -254,7 +254,7 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
             params["issued_from"] = ns.date_from
         if ns.date_to:
             params["issued_to"] = ns.date_to
-        rows = client.list("akt/ledgers", params=params, all_pages=True)
+        rows = client.list("akt-api/ledgers", params=params, all_pages=True)
         cols = ["issued_at", "entry_type", "debit", "credit", "ledgerable_type", "ledgerable_id"]
         emit(rows, as_json=ns.json, columns=None if ns.json else cols,
              headers=["Date", "Type", "Debit", "Credit", "Source", "Source ID"])
@@ -280,7 +280,7 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
         accounts_by_id = {a["id"]: {"code": a.get("code"), "name": a.get("name")} for a in accounts}
         accounts_by_code = {int(a["code"]): a["id"] for a in accounts if a.get("code") is not None}
 
-        item_ledgers = client.list("akt/ledgers", all_pages=True, params={
+        item_ledgers = client.list("akt-api/ledgers", all_pages=True, params={
             "ledgerable_type": "App\\Models\\Banking\\Transaction", "entry_type": "item"})
         item_account_by_txn = {int(l["ledgerable_id"]): int(l["account_id"]) for l in item_ledgers}
 

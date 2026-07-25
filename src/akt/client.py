@@ -193,11 +193,11 @@ class Client:
         return self.request("GET", path, **kw)
 
     def has_ledger_api(self) -> bool:
-        """True if the akt-api companion module is installed (GET /api/akt/ledgers
+        """True if the akt-api companion module is installed (GET /api/akt-api/ledgers
         is reachable). A 404 means the module is absent. Cached per client."""
         if "ledger_api" not in self._capabilities:
             try:
-                self.get("akt/ledgers", params={"limit": 1})
+                self.get("akt-api/ledgers", params={"limit": 1})
                 self._capabilities["ledger_api"] = True
             except ApiError as e:
                 if e.status == 404:

@@ -3,13 +3,20 @@
 use Illuminate\Support\Facades\Route;
 
 /**
- * Route::api() (app/Providers/Route.php) prefixes with config('api.prefix')/akt,
- * applies config('api.middleware') — the core `api` group: auth.basic.once +
- * permission:read-api + company.identify + read.only — and resolves the
- * namespace to Modules\AktApi\Http\Controllers\Api.
+ * Mirrors the DoubleEntry module's own API route registration — deliberately NOT
+ * the Route::api() macro. That macro (a) wraps routes in a {company_id} URL
+ * prefix (giving /{company}/api/... instead of the flat /api/... surface that
+ * akt and every core API resource use) and (b) derives the controller namespace
+ * from Str::studly(alias). A plain group with a fixed namespace avoids both:
  *
- * Endpoint: GET /api/akt/ledgers
+ *   Endpoint:  GET /api/akt-api/ledgers   (company is passed as ?company_id=)
  */
-Route::api('akt', function ($router) {
-    $router->apiResource('ledgers', 'Ledgers')->only(['index']);
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'api',
+    'namespace' => 'Modules\AktApi\Http\Controllers\Api',
+], function () {
+    Route::group(['as' => 'api.'], function () {
+        Route::get('akt-api/ledgers', 'Ledgers@index')->name('akt-api.ledgers.index');
+    });
 });

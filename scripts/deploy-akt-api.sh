@@ -21,9 +21,9 @@ SSH_HOST="${AKT_API_SSH_HOST:-akaunting-host}"
 REMOTE="${AKT_API_REMOTE:-akaunting}"
 COMPANY="${AKT_API_COMPANY:-1}"
 APP_URL="${AKT_API_APP_URL:-https://akaunting.example.com}"
-ALIAS="akt"          # module.json alias (== the /api/<alias>/ URL prefix)
-MODDIR="AktApi"      # install directory (StudlyCase, for autoloading)
-ENDPOINT="api/akt/ledgers"
+ALIAS="akt-api"      # module.json alias (== the /api/<alias>/ URL prefix; Str::studly -> AktApi)
+MODDIR="AktApi"      # install directory (StudlyCase, matches Str::studly(alias) + the namespace)
+ENDPOINT="api/akt-api/ledgers"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE_SRC="$(cd "$SCRIPT_DIR/../akt-api" && pwd)"
@@ -33,9 +33,9 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; }
 remote() { ssh "$SSH_HOST" "cd $REMOTE && $*"; }
 
 rollback() {
-    log "rolling back — disabling + removing the module, clearing caches"
+    log "rolling back — removing the modules row + files, clearing caches"
     ssh "$SSH_HOST" "cd $REMOTE && \
-        php artisan module:disable $ALIAS $COMPANY >/dev/null 2>&1 || true; \
+        php artisan tinker --execute=\"DB::table('modules')->where('alias','$ALIAS')->delete();\" >/dev/null 2>&1 || true; \
         rm -rf modules/$MODDIR; \
         php artisan cache:clear >/dev/null 2>&1 || true; \
         php artisan route:clear >/dev/null 2>&1 || true" || true
@@ -46,13 +46,20 @@ rollback() {
 log "sync $MODULE_SRC/ -> $SSH_HOST:$REMOTE/modules/$MODDIR/"
 rsync -az --delete "$MODULE_SRC"/ "$SSH_HOST:$REMOTE/modules/$MODDIR/"
 
-log "enable '$ALIAS' for company $COMPANY + clear caches"
-if ! remote "php artisan module:enable $ALIAS $COMPANY && \
-             php artisan cache:clear && php artisan config:clear && php artisan route:clear"; then
-    fail "module:enable / cache-clear failed"
+# Enable = an upsert into the `modules` table (exactly what Akaunting's
+# ModuleActivator::setActive does). We write the row directly instead of using
+# `php artisan module:enable`, whose module-name resolution is unreliable for a
+# hand-placed (non-marketplace) module. Idempotent: re-running just re-sets it.
+log "enable '$ALIAS' for company $COMPANY (upsert the modules row)"
+if ! remote "php artisan tinker --execute=\"DB::table('modules')->updateOrInsert(['company_id'=>$COMPANY,'alias'=>'$ALIAS','deleted_at'=>null],['enabled'=>1,'created_at'=>now(),'updated_at'=>now()]);\""; then
+    fail "enable (modules row upsert) failed"
     rollback
     exit 1
 fi
+
+# Clear caches AFTER — refreshes the module status + route registration.
+log "clear caches so the module status + routes refresh"
+remote "php artisan cache:clear && php artisan config:clear && php artisan route:clear" >/dev/null
 
 log "verify the route is registered"
 if ! remote "php artisan route:list 2>/dev/null" | grep -q "$ENDPOINT"; then

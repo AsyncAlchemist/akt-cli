@@ -10,6 +10,21 @@ use Modules\AktApi\Http\Resources\Ledger as Resource;
 class Ledgers extends ApiController
 {
     /**
+     * Gate on DoubleEntry read access — the data this exposes is DoubleEntry's,
+     * and the admin/API role already holds this permission.
+     *
+     * We intentionally do NOT call parent::__construct(): the base
+     * ApiController::__construct() runs assignPermissionsToController(), which
+     * would auto-require a non-existent `read-akt-api-ledgers` permission and
+     * return 403. Declaring our own middleware here (mirroring the DoubleEntry
+     * module's own API controllers) is the supported pattern.
+     */
+    public function __construct()
+    {
+        $this->middleware('permission:read-double-entry-chart-of-accounts')->only('index');
+    }
+
+    /**
      * Display a listing of general-ledger postings.
      *
      * Reads DoubleEntry's ledger table directly (no DoubleEntry class imported).
