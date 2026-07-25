@@ -21,5 +21,8 @@ Route::group([
         // Recode: repoint one item-leg posting to the correct GL account. This is
         // the in-place fix for transactions the module defaulted to 628/200/etc.
         Route::patch('akt-api/ledgers/{id}', 'Ledgers@update')->name('akt-api.ledgers.update');
+        // Per-account debit/credit totals over an optional date window — powers
+        // akt balance / trial-balance / report.
+        Route::get('akt-api/balances', 'Balances@index')->name('akt-api.balances.index');
     });
 });
