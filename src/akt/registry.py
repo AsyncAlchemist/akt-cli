@@ -16,6 +16,7 @@ from .resources import (
     redate_opening_balance,
     resolve_payment_delete,
     resolve_payment_update,
+    split_payment_legs,
 )
 
 # Common column sets
@@ -251,6 +252,7 @@ PAYMENT = Resource(
     build_create=build_payment_create,
     delete_resolver=resolve_payment_delete,
     update_resolver=resolve_payment_update,
+    post_write=split_payment_legs,
     help="Payments / transactions (income & expense)",
 )
 

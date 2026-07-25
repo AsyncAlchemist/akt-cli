@@ -1,7 +1,7 @@
 {
     "alias": "akt-api",
     "icon": "fa fa-book",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "active": 1,
     "providers": [
         "Modules\\AktApi\\Providers\\Main"

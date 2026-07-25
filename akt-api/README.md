@@ -10,14 +10,19 @@ Akaunting's DoubleEntry app publishes only `journal-entry` and
 transaction's postings live) has no endpoint. This module adds one:
 
 ```
-GET /api/akt-api/ledgers
+GET   /api/akt-api/ledgers            # read GL postings
+PATCH /api/akt-api/ledgers/{id}       # recode: repoint one item leg's GL account
+POST  /api/akt-api/ledgers/{id}/split # split: fan one item leg into N item legs
 ```
 
 ## What it does
 
-- Registers a single read-only route, `GET /api/akt-api/ledgers` (via the core
-  `Route::api('akt-api', …)` macro), namespaced under `/api/akt-api/` so it can
-  never collide with core or other modules' routes.
+- Registers routes under `/api/akt-api/` (via the core `Route::api('akt-api', …)`
+  macro) so they can never collide with core or other modules' routes: a read
+  route (`GET .../ledgers`) plus two targeted item-leg writes — **recode**
+  (`PATCH .../ledgers/{id}`, repoint one item leg's GL account) and **split**
+  (`POST .../ledgers/{id}/split`, fan one item leg out into N item legs so a bank
+  transaction can post to several GL accounts, the way an invoice's line items do).
 - Reads the `double_entry_ledger` table via the query builder only — it does
   **not** import or modify any DoubleEntry code, so it survives DoubleEntry
   updates. (It couples only to that table's column names.)

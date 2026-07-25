@@ -436,6 +436,33 @@ def build_document_update(res: Resource, client: Client, ns: Any, current: dict)
 # payment (transaction) body builder
 # --------------------------------------------------------------------------
 
+def parse_split_leg(spec: str) -> dict:
+    """Parse one ``--split`` leg: ``account=<code|name>,debit=<x>`` or
+    ``account=<code|name>,credit=<x>``. Exactly one of debit/credit; ``account`` is a
+    GL code or name resolved against the COA (like ``--account``). Returns
+    ``{'account': str, 'debit'|'credit': float}``."""
+    item: dict[str, Any] = {}
+    for part in spec.split(","):
+        if not part.strip():
+            continue
+        if "=" not in part:
+            raise ValueError(f"--split field must be key=value, got {part!r}")
+        k, _, v = part.partition("=")
+        item[k.strip()] = v.strip()
+    if not item.get("account"):
+        raise ValueError(f"--split leg requires an account=<code|name> field: {spec!r}")
+    has_d = bool(item.get("debit"))
+    has_c = bool(item.get("credit"))
+    if has_d == has_c:
+        raise ValueError(f"--split leg requires exactly one of debit=/credit=: {spec!r}")
+    leg = {"account": item["account"]}
+    if has_d:
+        leg["debit"] = float(item["debit"])
+    else:
+        leg["credit"] = float(item["credit"])
+    return leg
+
+
 def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
     invoice_id = getattr(ns, "invoice", None)
     bill_id = getattr(ns, "bill", None)
@@ -461,6 +488,33 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
             de_account_id, coa_category_id = resolve_coding(coa, client, category_ref=category_ref)
         if category_id is None:            # explicit --category-id wins
             category_id = coa_category_id
+
+    # --split: one bank transaction posting N GL item legs (like an invoice's line
+    # items). Resolve each leg's account to a de_account_id; the placeholder item
+    # leg uses the first leg's account, then the split_payment_legs post_write hook
+    # fans it out into the N legs via the akt-api endpoint. category_id stays a
+    # single representative label (mirrors invoice behavior); the GL is the truth.
+    split_specs = getattr(ns, "split", None)
+    split_legs = None
+    if split_specs:
+        if account_ref or category_ref:
+            raise ValueError("pass either --split or --account/--category, not both")
+        if coa is None:
+            raise ValueError("--split requires a COA config (pass --coa FILE or set AKT_COA_FILE)")
+        split_legs = []
+        for spec in split_specs:
+            leg = parse_split_leg(spec)
+            leg_de_account_id, leg_category_id = resolve_coding(coa, client, account_ref=leg["account"])
+            resolved = {"account_id": leg_de_account_id}
+            if "debit" in leg:
+                resolved["debit"] = leg["debit"]
+            else:
+                resolved["credit"] = leg["credit"]
+            split_legs.append(resolved)
+            if category_id is None:        # first leg's category = representative label
+                category_id = leg_category_id
+        de_account_id = split_legs[0]["account_id"]   # placeholder item leg
+        ns._split_resolved = split_legs
 
     if invoice_id:
         document = client.show("documents", invoice_id, type_scope="invoice")
@@ -502,6 +556,17 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
         amount = document.get("amount_due", document.get("amount"))
     if amount is None:
         raise ValueError("--amount is required")
+
+    # --split balance: the legs must net to the transaction's single item leg, which
+    # mirrors --amount and the bank leg. Income posts the item leg as a credit of
+    # --amount (net -amount); expense as a debit (net +amount). Fail fast client-side.
+    if split_legs is not None:
+        expected = float(amount) if ptype == "expense" else -float(amount)
+        net = sum(l.get("debit", 0) - l.get("credit", 0) for l in split_legs)
+        if abs(net - expected) > 0.005:
+            raise ValueError(
+                f"--split legs net {net:.2f} but --amount {amount} (type {ptype}) needs "
+                f"{expected:.2f} — income legs must be credit-heavy, expense debit-heavy")
 
     account_id = getattr(ns, "account_id", None)
     if account_id is None:
@@ -574,6 +639,32 @@ def resolve_payment_update(res: Resource, client: Client, ident: str,
         scope = "invoice" if current.get("type") == "income" else "bill"
         return f"documents/{doc_id}/transactions/{ident}", scope
     return f"transactions/{ident}", None
+
+
+def split_payment_legs(res: Resource, client: Client, record: dict, ns: Any) -> None:
+    """post_write hook for ``payment create --split``: after the transaction is
+    created (with a single placeholder item leg), fan that leg out into the N
+    resolved legs via the akt-api ``POST /ledgers/{id}/split`` endpoint. No-op unless
+    ``--split`` was given. Requires the akt-api companion module."""
+    legs = getattr(ns, "_split_resolved", None)
+    if not legs:
+        return
+    if not client.has_ledger_api():
+        raise ValueError(
+            "--split needs the akt-api companion module (GET /api/akt-api/ledgers is "
+            "404). Deploy it (scripts/deploy-akt-api.sh) and retry.")
+    txn_id = record.get("id")
+    payload = client.get("akt-api/ledgers", params={
+        "ledgerable_type": "App\\Models\\Banking\\Transaction",
+        "ledgerable_id": txn_id,
+        "entry_type": "item",
+    })
+    rows = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if len(rows) != 1:
+        raise ValueError(
+            f"expected exactly one item leg on transaction {txn_id} to split, found "
+            f"{len(rows)}")
+    client.post(f"akt-api/ledgers/{rows[0]['id']}/split", {"legs": legs})
 
 
 def build_transfer_create(res: Resource, client: Client, ns: Any) -> dict:
