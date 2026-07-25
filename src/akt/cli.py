@@ -197,8 +197,10 @@ def _build_parser() -> argparse.ArgumentParser:
     lp.set_defaults(_special="ledger")
 
     vp = sub.add_parser("verify", parents=[common],
-                        help="Audit standalone income/expense postings vs their category "
-                             "(needs akt-api + --coa)")
+                        help="Audit standalone income/expense postings: wrong GL account for "
+                             "their category, AND type/class mismatches the COA report silently "
+                             "drops (e.g. a refund booked as income onto an expense account). "
+                             "Needs akt-api + --coa")
     vp.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="Earliest paid_at")
     vp.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="Latest paid_at")
     vp.set_defaults(_special="verify")

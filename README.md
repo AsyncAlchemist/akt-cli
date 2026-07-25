@@ -273,6 +273,31 @@ impossible. Bill/invoice payments (which post to A/P–A/R) are exempt, and with
 `--coa` config the old behaviour is unchanged. Use `akt verify` to catch any
 transactions (e.g. web-UI entries) that slipped past.
 
+### Refunds — mind the report's type-guard
+
+Akaunting's DoubleEntry chart-of-accounts P&L report only counts a posting when
+the **transaction type matches the account class** — an `income` transaction on an
+*expense* account (or an `expense` on an *income* account) is **silently dropped**
+from the report even though it balances in the ledger. This bites refunds: a
+vendor refund is money *in*, so Akaunting makes it an `income` transaction — but if
+you code it onto the expense account it was reversing, the report ignores it and
+overstates that expense. (Swapping the debit/credit to keep it "on the expense
+account" doesn't help: Akaunting picks Dr/Cr from the type, rejects negative
+amounts, and re-posts on edit.)
+
+Book a refund so its type matches its account's class:
+
+* **To a matching-class account** — a money-in refund → an *income*-class account
+  (e.g. a dedicated "Vendor Refunds" income account). Net profit is unchanged; the
+  original expense stays gross.
+* **As a journal entry** (`Dr bank / Cr expense`) — the report's separate journal
+  path nets it by account class regardless of type. Caveat: a JE that touches a
+  bank account also spawns a bank-register transaction.
+
+**`akt verify` flags any standalone income/expense transaction posted to an
+opposite-class account** (and exits non-zero), so you can gate CI on it and never
+ship a refund the report will quietly ignore.
+
 # Anything else: raw API access
 akt raw GET reports
 akt raw POST items --data '{"name":"Ad-hoc","type":"service","sale_price":99}'
