@@ -536,3 +536,32 @@ def test_resolve_mirror_false_account_errors_clearly():
     client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
     with pytest.raises(ValueError, match="mirror=false"):
         resolve_coding(_cfg(), client, account_ref="850")
+
+
+# --- reverse lookup: category -> account (Task 2) ---------------------------
+
+def test_by_category_matches_name_and_type():
+    cfg = parse_coa(_MINIMAL)
+    assert cfg.by_category("Other / Uncategorized", "expense").code == 628
+    assert cfg.by_category("Other / Uncategorized", "income") is None   # wrong type
+    assert cfg.by_category("Operating Checking") is None                     # mirror=false -> not returned
+
+
+def test_resolve_coding_by_category_ref():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    de_id, cat_id = resolve_coding(_cfg(), client, category_ref="Other / Uncategorized")
+    assert (de_id, cat_id) == (61, 11)
+
+
+def test_resolve_coding_unknown_category_ref_errors():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    with pytest.raises(ValueError, match="no mirrored account"):
+        resolve_coding(_cfg(), client, category_ref="Nonexistent Category")
+
+
+def test_resolve_coding_requires_exactly_one_ref():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES)
+    with pytest.raises(ValueError, match="exactly one"):
+        resolve_coding(_cfg(), client)                                  # neither
+    with pytest.raises(ValueError, match="exactly one"):
+        resolve_coding(_cfg(), client, account_ref="628", category_ref="x")  # both

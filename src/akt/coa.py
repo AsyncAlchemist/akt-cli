@@ -53,6 +53,16 @@ class CoaConfig:
                 return a
         return None
 
+    def by_category(self, category: str, category_type: str | None = None) -> CoaAccount | None:
+        """Reverse of by_name: the mirrored account whose mirror category matches
+        (name, and type when given). Non-mirrored accounts have no category."""
+        for a in self.accounts:
+            if a.mirror and a.category == category and (
+                category_type is None or a.category_type == category_type
+            ):
+                return a
+        return None
+
     @property
     def mirrored(self) -> list[CoaAccount]:
         return [a for a in self.accounts if a.mirror]
@@ -265,12 +275,21 @@ def _find_account(config: CoaConfig, ref: str) -> CoaAccount:
     return acct
 
 
-def resolve_coding(config: CoaConfig, client, *, account_ref: str) -> tuple[int, int]:
-    """Resolve --account to live (de_account_id, category_id).
+def resolve_coding(config: CoaConfig, client, *, account_ref: str | None = None,
+                   category_ref: str | None = None) -> tuple[int, int]:
+    """Resolve --account OR --category to live (de_account_id, category_id).
 
-    The account must already exist in Akaunting (run `coa sync`); category_id
-    is auto-derived from its mirror category, which must also already exist."""
-    acct = _find_account(config, account_ref)
+    Pass exactly one ref. Both directions require the account to be mirrored and
+    both the account and its mirror category to already exist (run `coa sync`)."""
+    if (account_ref is None) == (category_ref is None):
+        raise ValueError("resolve_coding needs exactly one of account_ref / category_ref")
+
+    if account_ref is not None:
+        acct = _find_account(config, account_ref)
+    else:
+        acct = next((a for a in config.accounts if a.mirror and a.category == category_ref), None)
+        if acct is None:
+            raise ValueError(f"category {category_ref!r} has no mirrored account in the COA config")
 
     if not acct.mirror:
         raise ValueError(
