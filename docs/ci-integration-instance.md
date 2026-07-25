@@ -39,20 +39,22 @@ create/delete churn are harmless.
    `php artisan company:seed 1 --class="Modules\DoubleEntry\Database\Seeds\Install"`.
    (Your Akaunting licence covers installing an app you've purchased on as many of
    your own installations as you like; the module does no runtime licence check.)
-6. **Map the default bank into the ledger.** DE posts a transaction's ledger legs
-   only if the transaction's bank has a `double_entry_account_bank` row (see
+6. **Run Double-Entry's `CopyData` install job.** DE posts a transaction's ledger
+   legs only if that transaction's bank has a `double_entry_account_bank` row (see
    `Observers/Banking/Transaction::created` — it bails when the bank isn't mapped).
-   DE's own bank observer creates that mapping, but only for banks created *after*
-   DE is enabled — the **default "Cash" bank is created at install, before DE**, so
-   it's never mapped and every payment on it silently posts nothing (which breaks
-   `payment --split`, whose fan-out needs the one item leg). Create the mapping:
-   ```sql
-   INSERT INTO <prefix>double_entry_accounts (company_id,type_id,code,name,enabled,created_at,updated_at)
-     VALUES (1, 6, <next-code>, 'Cash', 1, NOW(), NOW());
-   INSERT INTO <prefix>double_entry_account_bank (company_id,account_id,bank_id,created_at,updated_at)
-     SELECT 1, id, 1, NOW(), NOW() FROM <prefix>double_entry_accounts WHERE code=<next-code>;
+   DE normally maps every existing bank (and backfills the ledger for pre-existing
+   transactions/invoices/bills) via `Jobs\Install\CopyData`, dispatched by its
+   `ModuleEnabled` / `FinishInstallation` listeners — but only when DE is enabled
+   through Akaunting's module-enable **event**. Enabling it via a direct `modules`-row
+   upsert (as in step 5) skips that, so the **default "Cash" bank, created at install
+   before DE, is never mapped** — every payment on it then silently posts nothing,
+   which breaks `payment --split` (its fan-out needs the one item leg). Run the job
+   explicitly with company context — the faithful fix, not a hand-rolled mapping:
    ```
-   (Or delete + recreate the Cash bank via the API so DE's observer maps it.)
+   php artisan tinker --execute='
+     \App\Models\Common\Company::find(1)->makeCurrent();
+     dispatch_sync(new \Modules\DoubleEntry\Jobs\Install\CopyData());'
+   ```
 7. **akt-api**: `scripts/deploy-akt-api.sh` rsyncs + enables it — or copy it to
    `modules/AktApi`, upsert its `modules` row, and clear caches.
 8. **Skip the setup wizard** (it 302-redirects every route until done):
