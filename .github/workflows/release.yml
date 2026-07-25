@@ -1,12 +1,15 @@
 name: Release (integration)
 
-# Full-surface integration tests against the live Akaunting deployment.
-# Runs on published releases and on demand. Creates real records and deletes
-# them again on teardown.
-
+# Full-surface integration tests against a LIVE Akaunting deployment. Creates real
+# records and deletes them on teardown — but Akaunting soft-deletes, so each run
+# still leaves orphaned ledger rows behind, and the suite runs `coa sync` which can
+# mutate the chart of accounts. It must therefore NOT run against a shared/prod
+# instance on every release: that pollutes the books and makes releases flaky on a
+# transient network blip (publishing is handled separately by publish.yml).
+#
+# Run it ON DEMAND only (workflow_dispatch). TODO: point AKT_BASE_URL at a
+# disposable/staging instance and restore an automatic trigger.
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
