@@ -4,7 +4,7 @@ namespace Modules\AktApi\Http\Controllers\Api;
 
 use App\Abstracts\Http\ApiController;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use Modules\DoubleEntry\Models\Ledger;
 use Modules\AktApi\Http\Resources\Balance as Resource;
 
 class Balances extends ApiController
@@ -17,15 +17,19 @@ class Balances extends ApiController
     }
 
     /**
-     * Per-account debit/credit totals over an optional date window
-     * (inclusive, on the calendar date of issued_at). One row per account.
+     * Per-account debit/credit totals over an optional date window (inclusive,
+     * on the calendar date of issued_at). One row per account.
+     *
+     * Aggregates through the DoubleEntry Ledger model's `ledgerable` relation and
+     * skips rows whose ledgerable no longer exists (soft-deleted transactions /
+     * documents leave orphaned ledger rows behind). This matches how Akaunting's
+     * own reports read the ledger; a raw table sum would double-count orphans.
      *
      * @return \Illuminate\Http\JsonResponse
      */
     public function index(Request $request)
     {
-        $query = DB::table('double_entry_ledger')
-            ->where('company_id', company_id());
+        $query = Ledger::where('company_id', company_id());
 
         if ($request->filled('date_from')) {
             $query->whereDate('issued_at', '>=', $request->input('date_from'));
@@ -34,11 +38,23 @@ class Balances extends ApiController
             $query->whereDate('issued_at', '<=', $request->input('date_to'));
         }
 
-        $rows = $query->groupBy('account_id')
-            ->selectRaw('account_id, COALESCE(SUM(debit),0) as debit, COALESCE(SUM(credit),0) as credit')
-            ->orderBy('account_id')
-            ->get();
+        $totals = [];
+        $query->with('ledgerable')->chunkById(2000, function ($rows) use (&$totals) {
+            foreach ($rows as $l) {
+                if ($l->ledgerable === null) {
+                    continue;   // orphaned (soft-deleted/missing) — excluded, as Akaunting does
+                }
+                $aid = (int) $l->account_id;
+                if (! isset($totals[$aid])) {
+                    $totals[$aid] = (object) ['account_id' => $aid, 'debit' => 0.0, 'credit' => 0.0];
+                }
+                $totals[$aid]->debit += (float) $l->debit;
+                $totals[$aid]->credit += (float) $l->credit;
+            }
+        });
 
-        return Resource::collection($rows);
+        ksort($totals);
+
+        return Resource::collection(collect(array_values($totals)));
     }
 }
