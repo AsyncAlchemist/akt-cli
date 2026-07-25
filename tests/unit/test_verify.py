@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 from akt.coa import parse_coa
-from akt.verify import find_miscodings
+from akt.verify import find_miscodings, build_recode_plan
 
 pytestmark = pytest.mark.unit
 
@@ -61,3 +61,19 @@ def test_flags_txn_not_posted_at_all():
     assert len(out) == 1
     assert out[0]["actual_code"] is None
     assert out[0]["reason"] == "not posted to the ledger"
+
+
+def test_build_recode_plan_targets_only_wrong_item_legs():
+    coa = parse_coa(_COA)
+    item_ledgers = [
+        {"id": 500, "ledgerable_id": 1, "account_id": 91},   # txn1 posted to 628 (wrong)
+        {"id": 501, "ledgerable_id": 2, "account_id": 90},   # txn2 posted to 615 (correct)
+        {"id": 502, "ledgerable_id": 9, "account_id": 91},   # txn9 not in our set -> skip
+    ]
+    category_by_txn = {1: 38, 2: 38}                          # both Hosting -> expected 615
+    plan = build_recode_plan(item_ledgers, category_by_txn, _CATS,
+                             _ACCTS_BY_ID, _ACCTS_BY_CODE, coa)
+    assert len(plan) == 1
+    p = plan[0]
+    assert p["ledger_id"] == 500 and p["transaction_id"] == 1
+    assert p["from_code"] == 628 and p["to_code"] == 615 and p["to_account_id"] == 90

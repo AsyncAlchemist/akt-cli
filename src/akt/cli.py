@@ -23,7 +23,7 @@ from .registry import RESOURCES, BY_NOUN
 from .resources import Resource, load_data_arg
 from .coa import load_coa, plan_sync, render_plan, apply_plan
 from .ledger import resolve_account_id
-from .verify import find_miscodings
+from .verify import find_miscodings, build_recode_plan
 
 
 def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bool) -> None:
@@ -193,6 +193,15 @@ def _build_parser() -> argparse.ArgumentParser:
     vp.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="Latest paid_at")
     vp.set_defaults(_special="verify")
 
+    rcp = sub.add_parser("recode", parents=[common],
+                         help="Repost mis-coded standalone income/expense txns to their "
+                              "category's GL account (needs akt-api + --coa)")
+    rcp.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="Earliest paid_at")
+    rcp.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="Latest paid_at")
+    rcp.add_argument("--dry-run", dest="dry_run", action="store_true",
+                     help="show the plan without writing anything")
+    rcp.set_defaults(_special="recode")
+
     return parser
 
 
@@ -291,6 +300,50 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
         emit(findings, as_json=ns.json, columns=None if ns.json else cols,
              headers=["Txn", "Date", "Amount", "Category", "Expected", "Actual", "Reason"])
         return 0 if not findings else 1
+    if name == "recode":
+        coa = ns._coa
+        if coa is None:
+            raise ValueError("`akt recode` needs a COA config (use --coa FILE or set AKT_COA_FILE)")
+        if not client.has_ledger_api():
+            raise ValueError("`akt recode` needs the akt-api companion module — "
+                             "install it into your Akaunting modules/ directory (see akt-api/README.md)")
+
+        txns = [t for t in client.list("transactions", all_pages=True)
+                if t.get("type") in ("income", "expense") and not t.get("document_id")]
+        if ns.date_from:
+            txns = [t for t in txns if str(t.get("paid_at", ""))[:10] >= ns.date_from]
+        if ns.date_to:
+            txns = [t for t in txns if str(t.get("paid_at", ""))[:10] <= ns.date_to]
+        category_by_txn = {int(t["id"]): t.get("category_id") for t in txns}
+
+        categories_by_id = {c["id"]: {"name": c.get("name"), "type": c.get("type")}
+                            for c in client.list("categories", all_pages=True)}
+        accounts = client.list("chart-of-accounts", all_pages=True)
+        accounts_by_id = {a["id"]: {"code": a.get("code"), "name": a.get("name")} for a in accounts}
+        accounts_by_code = {int(a["code"]): a["id"] for a in accounts if a.get("code") is not None}
+        item_ledgers = [{"id": l["id"], "ledgerable_id": int(l["ledgerable_id"]),
+                         "account_id": int(l["account_id"])}
+                        for l in client.list("akt-api/ledgers", all_pages=True, params={
+                            "ledgerable_type": "App\\Models\\Banking\\Transaction",
+                            "entry_type": "item"})]
+
+        plan = build_recode_plan(item_ledgers, category_by_txn, categories_by_id,
+                                 accounts_by_id, accounts_by_code, coa)
+        cols = ["transaction_id", "category", "from_code", "to_code", "ledger_id"]
+        if ns.dry_run or not plan:
+            emit(plan, as_json=ns.json, columns=None if ns.json else cols,
+                 headers=["Txn", "Category", "From", "To", "LedgerRow"])
+            if not ns.json:
+                print(f"\n{len(plan)} transaction(s) would be recoded (dry-run)."
+                      if plan else "nothing to recode — all coded correctly.")
+            return 0
+        done = 0
+        for p in plan:
+            client.request("PATCH", f"akt-api/ledgers/{p['ledger_id']}",
+                           json_body={"account_id": p["to_account_id"]})
+            done += 1
+        print(f"recoded {done} transaction(s).")
+        return 0
     raise ValueError(name)
 
 

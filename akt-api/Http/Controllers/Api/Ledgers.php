@@ -22,6 +22,7 @@ class Ledgers extends ApiController
     public function __construct()
     {
         $this->middleware('permission:read-double-entry-chart-of-accounts')->only('index');
+        $this->middleware('permission:update-double-entry-chart-of-accounts')->only('update');
     }
 
     /**
@@ -61,5 +62,46 @@ class Ledgers extends ApiController
             ->paginate((int) $request->input('limit', 100));
 
         return Resource::collection($rows);
+    }
+
+    /**
+     * Repoint a single item-leg ledger posting to a different GL account.
+     *
+     * Only the `account_id` changes — debit/credit amounts and the paired
+     * total-leg (bank) row are untouched, so the entry stays balanced. Restricted
+     * to `entry_type = 'item'` rows so the bank leg can never be moved, and
+     * company-scoped both on read and write.
+     *
+     * @param  int|string  $id
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function update(Request $request, $id)
+    {
+        $request->validate(['account_id' => 'required|integer']);
+
+        $row = DB::table('double_entry_ledger')
+            ->where('id', (int) $id)
+            ->where('company_id', company_id())
+            ->first();
+
+        if (! $row) {
+            return $this->errorInternal('ledger row ' . $id . ' not found');
+        }
+        if ($row->entry_type !== 'item') {
+            return $this->errorInternal("only item-leg rows may be recoded (row {$id} is '{$row->entry_type}')");
+        }
+
+        DB::table('double_entry_ledger')
+            ->where('id', (int) $id)
+            ->where('company_id', company_id())
+            ->update([
+                'account_id' => (int) $request->input('account_id'),
+                'updated_at' => now(),
+            ]);
+
+        return new Resource((object) array_merge(
+            (array) $row,
+            ['account_id' => (int) $request->input('account_id')]
+        ));
     }
 }
