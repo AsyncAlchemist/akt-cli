@@ -242,7 +242,9 @@ def _need_akt_api(client: Client, cmd: str) -> None:
 
 
 def _fetch_balances(client: Client, ns: Any):
-    accounts = client.list("chart-of-accounts", all_pages=True)
+    # One big page instead of paginating (a chart of accounts is small); saves
+    # round-trips, which matters when a script runs many balance/report calls.
+    accounts = client.list("chart-of-accounts", all_pages=True, params={"limit": 1000})
     accts_by_id = {a["id"]: {"code": a.get("code"), "name": a.get("name"),
                              "type_id": a.get("type_id")} for a in accounts}
     params: dict[str, Any] = {}
