@@ -61,6 +61,28 @@ Then:
 * **Release** — bump `version` in `pyproject.toml`, push, and publish a GitHub
   Release. That runs the live integration suite and publishes to PyPI.
 
+## Reference: the Akaunting source
+
+`akt` is reverse-engineered from a running Akaunting instance, and the server
+source is checked out alongside this repo as the ground truth for API behavior —
+route definitions, controller/FormRequest validation, the AJAX envelope, and how
+the Double-Entry module posts and aggregates ledgers. **Read it before guessing**
+when a response shape, validation rule, or posting side-effect is unclear.
+
+* **Akaunting core** (Laravel app) — the `akaunting-src` symlink at the repo root
+  (→ `../accounting/source`). Routes live in `routes/api.php`; controllers under
+  `app/Http/Controllers/Api/`; API response shapes under `app/Http/Resources/`.
+* **Double-Entry module** — the sibling `akaunting-modules/DoubleEntry/`. Notable
+  paths: `Routes/api.php` (only `journal-entry` + read-only `chart-of-accounts`
+  are published on `/api` — there is **no** ledger endpoint), `Models/Ledger.php`
+  and `Models/AccountBank.php` (the bank↔GL-account link), `Observers/` (how each
+  transaction posts its double-entry ledgers), and `Reports/` (`TrialBalance`,
+  `BalanceSheet`, `GeneralLedger`, `JournalReport` — how the module aggregates
+  ledgers into the reports we mirror).
+
+> The symlink target is machine-relative; if it dangles, the checkout lives at
+> `…/accounting/{source,akaunting-modules/DoubleEntry}` next to this repo's parent.
+
 ## Project layout
 
 The code is small and declarative:

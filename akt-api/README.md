@@ -53,9 +53,9 @@ health-checks the app, and rolls back on failure:
 AKT_EMAIL=… AKT_PASSWORD=… scripts/deploy-akt-api.sh
 ```
 
-Config via env vars (defaults shown): `AKT_API_SSH_HOST=akaunting-host`,
-`AKT_API_REMOTE=akaunting`, `AKT_API_COMPANY=1`,
-`AKT_API_APP_URL=https://akaunting.example.com`.
+Config via env vars: `AKT_API_SSH_HOST` (your ssh host/alias, required),
+`AKT_API_APP_URL` (your Akaunting base URL, required), `AKT_API_REMOTE=akaunting`,
+`AKT_API_COMPANY=1`.
 
 ### Manual
 

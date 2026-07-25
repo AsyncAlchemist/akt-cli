@@ -8,19 +8,19 @@
 # Usage:
 #   AKT_EMAIL=… AKT_PASSWORD=… scripts/deploy-akt-api.sh
 #
-# Config (env vars, defaults shown):
-#   AKT_API_SSH_HOST=akaunting-host                          # ssh alias / host
-#   AKT_API_REMOTE=akaunting                        # akaunting root, relative to remote $HOME
-#   AKT_API_COMPANY=1                               # company id to enable the module for
-#   AKT_API_APP_URL=https://akaunting.example.com
-#   AKT_EMAIL / AKT_PASSWORD                        # for the authenticated 200 check (optional)
+# Config (env vars):
+#   AKT_API_SSH_HOST     (required)  ssh alias / host of the Akaunting server
+#   AKT_API_APP_URL      (required)  Akaunting base URL, e.g. https://akaunting.example.com
+#   AKT_API_REMOTE=akaunting         akaunting root, relative to the remote $HOME
+#   AKT_API_COMPANY=1                company id to enable the module for
+#   AKT_EMAIL / AKT_PASSWORD         for the authenticated 200 check (optional)
 #
 set -euo pipefail
 
-SSH_HOST="${AKT_API_SSH_HOST:-akaunting-host}"
+SSH_HOST="${AKT_API_SSH_HOST:?set AKT_API_SSH_HOST to your ssh host/alias}"
+APP_URL="${AKT_API_APP_URL:?set AKT_API_APP_URL to your Akaunting base URL}"
 REMOTE="${AKT_API_REMOTE:-akaunting}"
 COMPANY="${AKT_API_COMPANY:-1}"
-APP_URL="${AKT_API_APP_URL:-https://akaunting.example.com}"
 ALIAS="akt-api"      # module.json alias (== the /api/<alias>/ URL prefix; Str::studly -> AktApi)
 MODDIR="AktApi"      # install directory (StudlyCase, matches Str::studly(alias) + the namespace)
 ENDPOINT="api/akt-api/ledgers"
