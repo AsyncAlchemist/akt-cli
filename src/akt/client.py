@@ -69,6 +69,7 @@ class Client:
         self._last_request = 0.0
         self._settings_cache: dict[str, Any] = {}
         self._settings_loaded = False
+        self._capabilities: dict[str, bool] = {}  # optional-module probes (e.g. akt-api)
         self._web_authed = False  # whether a web (session-cookie) login has run
         self._session = requests.Session()
         self._session.auth = (config.email, config.password)
@@ -190,6 +191,20 @@ class Client:
 
     def get(self, path: str, **kw) -> Any:
         return self.request("GET", path, **kw)
+
+    def has_ledger_api(self) -> bool:
+        """True if the akt-api companion module is installed (GET /api/akt/ledgers
+        is reachable). A 404 means the module is absent. Cached per client."""
+        if "ledger_api" not in self._capabilities:
+            try:
+                self.get("akt/ledgers", params={"limit": 1})
+                self._capabilities["ledger_api"] = True
+            except ApiError as e:
+                if e.status == 404:
+                    self._capabilities["ledger_api"] = False
+                else:
+                    raise
+        return self._capabilities["ledger_api"]
 
     def post(self, path: str, json_body: Any, **kw) -> Any:
         return self.request("POST", path, json_body=json_body, **kw)
