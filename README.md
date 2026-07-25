@@ -234,10 +234,23 @@ akt coa sync --prune         # also DISABLE accounts/categories absent from the 
 
 # code a transaction by GL account — akt auto-fills the mirror category:
 akt payment create --type expense --bank 1 --amount 120 --account 628
+# ...or by category name — akt reverse-fills the matching GL account:
+akt payment create --type expense --bank 1 --amount 120 --category "Cloud Hosting"
 ```
 
-`--account` takes a GL code or name (the double-entry account; see `--bank` for
-the bank/cash account). An explicit `--set de_account_id=` still wins.
+`--account`/`--category` are two ends of the same coin: give either and akt fills
+the other from the COA config, so the category report and the COA report always
+agree. `--account` takes a GL code or name; `--category` a mirror-category name
+(see `--bank` for the bank/cash account). An explicit `--set de_account_id=` still
+wins.
+
+**Enforcement (when a `--coa` config is loaded):** akt refuses to create a
+*standalone* income/expense transaction that has no GL account — you must pass
+`--account`, `--category`, or an explicit `--set de_account_id=`. This makes the
+"category set but GL account left to the module's 628/400 default" mistake
+impossible. Bill/invoice payments (which post to A/P–A/R) are exempt, and with no
+`--coa` config the old behaviour is unchanged. Use `akt verify` to catch any
+transactions (e.g. web-UI entries) that slipped past.
 
 # Anything else: raw API access
 akt raw GET reports

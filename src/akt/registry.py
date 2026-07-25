@@ -229,6 +229,9 @@ PAYMENT = Resource(
         f("account", "GL/chart-of-accounts code or name to post to (the double-entry "
                      "account). Requires a --coa config; auto-fills the mirrored "
                      "category. See --bank for the bank/cash account."),
+        f("category", "Mirror category NAME to post under (requires a --coa config; "
+                      "reverse-fills the matching GL account). Mutually exclusive "
+                      "with --account."),
         f("document-id", "Linked document id (advanced)"),
         f("contact-id", "Contact id"),
         f("amount", "Payment amount"),

@@ -447,13 +447,18 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
 
     coa = getattr(ns, "_coa", None)
     account_ref = getattr(ns, "account", None)
+    category_ref = getattr(ns, "category", None)
     de_account_id = None
-    if account_ref:
+    if account_ref and category_ref:
+        raise ValueError("pass only one of --account / --category")
+    if account_ref or category_ref:
         if coa is None:
             raise ValueError(
-                "--account requires a COA config (pass --coa FILE or set AKT_COA_FILE)")
-        coa_de_account_id, coa_category_id = resolve_coding(coa, client, account_ref=account_ref)
-        de_account_id = coa_de_account_id
+                "--account/--category requires a COA config (pass --coa FILE or set AKT_COA_FILE)")
+        if account_ref:
+            de_account_id, coa_category_id = resolve_coding(coa, client, account_ref=account_ref)
+        else:                               # --category NAME -> reverse-resolve the GL account
+            de_account_id, coa_category_id = resolve_coding(coa, client, category_ref=category_ref)
         if category_id is None:            # explicit --category-id wins
             category_id = coa_category_id
 
@@ -470,6 +475,20 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
     if document is not None:
         contact_id = contact_id or document.get("contact_id")
         category_id = category_id or document.get("category_id")
+
+    # Config-gated enforcement (revises the COA spec's Decision #3): with a COA
+    # config loaded, a STANDALONE income/expense payment must resolve a GL account
+    # — via --account, --category, or an explicit --set/--data de_account_id.
+    # Bill/invoice payments (document_id set) post to A/P–A/R and are exempt.
+    # With no COA config, behaviour is unchanged (legacy).
+    overrides = {**parse_set(getattr(ns, "set_", None)),
+                 **load_data_arg(getattr(ns, "data", None))}
+    if (coa is not None and document_id is None and de_account_id is None
+            and "de_account_id" not in overrides):
+        raise ValueError(
+            "standalone income/expense payment needs a GL account — pass --account "
+            "CODE|NAME or --category NAME (with a COA config loaded, akt won't create "
+            "an un-GL-coded transaction). Use --set de_account_id=<id> to override.")
 
     if category_id is None:
         key = "default.income_category" if ptype == "income" else "default.expense_category"
@@ -515,8 +534,7 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
         body["description"] = ns.description
     if de_account_id is not None:
         body["de_account_id"] = de_account_id
-    body.update(parse_set(getattr(ns, "set_", None)))
-    body.update(load_data_arg(getattr(ns, "data", None)))
+    body.update(overrides)   # --set / --data win (computed once, above)
 
     # A payment tied to a document must be posted to the nested route
     # POST /documents/{id}/transactions (the flat /transactions endpoint rejects

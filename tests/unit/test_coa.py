@@ -482,7 +482,7 @@ def _payment_ns(**over):
                 contact_id=None, category_id=None, amount=1.0, account_id=1,
                 paid_at="2026-07-12", currency_code=None, currency_rate=None,
                 payment_method=None, number="TXN-1", reference=None,
-                description="x", account=None, set_=None, data=None)
+                description="x", account=None, category=None, set_=None, data=None)
     base.update(over)
     ns = SimpleNamespace(**base)
     ns._coa = _cfg()
@@ -506,12 +506,61 @@ def test_payment_create_explicit_set_de_account_wins():
     assert body["category_id"] == 10
 
 
-def test_payment_create_no_coa_flag_is_legacy():
+def test_payment_create_uncoded_legacy_when_no_coa():
+    # No COA config loaded -> unchanged legacy behaviour (no enforcement).
     client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
                            settings={"default.income_category": "2", "default.account": "1"})
-    body = build_payment_create(PAYMENT, client, _payment_ns(category_id=2))
+    ns = _payment_ns(category_id=2)
+    ns._coa = None
+    body = build_payment_create(PAYMENT, client, ns)
     assert "de_account_id" not in body          # untouched
     assert body["category_id"] == 2
+
+
+def test_payment_create_uncoded_standalone_errors_when_coa_loaded():
+    # Revises Decision #3: with a COA config, a standalone income/expense payment
+    # with no resolvable GL account is refused (was: silent legacy default).
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.income_category": "2", "default.account": "1"})
+    with pytest.raises(ValueError, match="GL account"):
+        build_payment_create(PAYMENT, client, _payment_ns(category_id=2))
+
+
+def test_payment_create_autofills_from_category_name():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.account": "1"})
+    body = build_payment_create(PAYMENT, client,
+                                _payment_ns(category="Other / Uncategorized", type="expense"))
+    assert body["de_account_id"] == 61          # reverse-resolved from the category
+    assert body["category_id"] == 11
+
+
+def test_payment_create_account_and_category_conflict_errors():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.account": "1"})
+    with pytest.raises(ValueError, match="only one"):
+        build_payment_create(PAYMENT, client,
+                             _payment_ns(account="400", category="Other / Uncategorized"))
+
+
+def test_payment_create_explicit_set_de_account_satisfies_enforcement():
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.income_category": "2", "default.account": "1"})
+    body = build_payment_create(PAYMENT, client,
+                                _payment_ns(category_id=2, set_=["de_account_id=77"]))
+    assert body["de_account_id"] == 77          # explicit --set counts as coded
+    assert body["category_id"] == 2
+
+
+def test_payment_create_document_payment_exempt_from_enforcement():
+    # A bill/invoice payment (document_id present) posts to A/P–A/R, so it's not
+    # required to carry a GL expense/revenue account even with a COA loaded.
+    client = CoaFakeClient(_LIVE_ACCOUNTS, _LIVE_CATEGORIES,
+                           settings={"default.account": "1"})
+    body = build_payment_create(PAYMENT, client,
+                                _payment_ns(document_id=5, category_id=7))
+    assert "de_account_id" not in body
+    assert body["category_id"] == 7
 
 
 def test_payment_create_explicit_category_id_wins_over_coa():
