@@ -246,6 +246,20 @@ akt company
 akt settings --search 'key:default.account'
 ```
 
+## Reading the ledger: the `akt-api` companion module
+
+Akaunting's Double-Entry app exposes only `journal-entry` and `chart-of-accounts`
+over the API — the ledger itself (where every transaction's postings land) has no
+endpoint. The optional **`akt-api`** companion module (in `akt-api/`, install it
+into your Akaunting `modules/` directory — see `akt-api/README.md`) adds a
+read-only `GET /api/akt/ledgers`. When it's present, extra commands light up; when
+it's not, they print an install hint and everything else works unchanged.
+
+```bash
+# Show what actually posted to a GL account (by code or name):
+akt ledger --account 628 --from 2025-01-01 --to 2025-12-31
+```
+
 ## Akaunting gotchas `akt` handles for you
 
 Driving Akaunting's API directly has sharp edges; `akt` papers over these:

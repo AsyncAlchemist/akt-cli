@@ -22,6 +22,7 @@ from .output import emit
 from .registry import RESOURCES, BY_NOUN
 from .resources import Resource, load_data_arg
 from .coa import load_coa, plan_sync, render_plan, apply_plan
+from .ledger import resolve_account_id
 
 
 def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bool) -> None:
@@ -176,6 +177,14 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="disable accounts/categories absent from the config (never deletes)")
     csp.set_defaults(_special="coa_sync")
 
+    lp = sub.add_parser("ledger", parents=[common],
+                        help="Show general-ledger postings (needs the akt-api module)")
+    lp.add_argument("--account", required=True, metavar="CODE|NAME",
+                    help="Chart-of-accounts code or name to show postings for")
+    lp.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="Earliest issued_at")
+    lp.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="Latest issued_at")
+    lp.set_defaults(_special="ledger")
+
     return parser
 
 
@@ -225,6 +234,22 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
             return 0
         summary = apply_plan(client, plan, prune=ns.prune)
         print("applied: " + ", ".join(f"{k}={v}" for k, v in summary.items() if v))
+        return 0
+    if name == "ledger":
+        if not client.has_ledger_api():
+            raise ValueError("`akt ledger` needs the akt-api companion module — "
+                             "install it into your Akaunting modules/ directory (see akt-api/README.md)")
+        accounts = client.list("chart-of-accounts", all_pages=True)
+        account_id = resolve_account_id(accounts, ns.account)
+        params: dict = {"account_id": account_id}
+        if ns.date_from:
+            params["issued_from"] = ns.date_from
+        if ns.date_to:
+            params["issued_to"] = ns.date_to
+        rows = client.list("akt/ledgers", params=params, all_pages=True)
+        cols = ["issued_at", "entry_type", "debit", "credit", "ledgerable_type", "ledgerable_id"]
+        emit(rows, as_json=ns.json, columns=None if ns.json else cols,
+             headers=["Date", "Type", "Debit", "Credit", "Source", "Source ID"])
         return 0
     raise ValueError(name)
 
