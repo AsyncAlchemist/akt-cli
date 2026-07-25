@@ -24,5 +24,8 @@ Route::group([
         // Per-account debit/credit totals over an optional date window — powers
         // akt balance / trial-balance / report.
         Route::get('akt-api/balances', 'Balances@index')->name('akt-api.balances.index');
+        // Orphaned ledger rows (ledgerable soft-deleted/missing) — report + prune.
+        Route::get('akt-api/ledgers/orphans', 'Ledgers@orphans')->name('akt-api.ledgers.orphans');
+        Route::delete('akt-api/ledgers/orphans', 'Ledgers@pruneOrphans')->name('akt-api.ledgers.prune-orphans');
     });
 });

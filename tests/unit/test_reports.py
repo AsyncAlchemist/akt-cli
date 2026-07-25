@@ -76,3 +76,10 @@ def test_report_commands_parse():
     assert ns._special == "report_pnl"
     ns = _build_parser().parse_args(["report", "balance-sheet", "--to", "2025-12-31"])
     assert ns._special == "report_bs"
+
+
+def test_gc_ledger_parses():
+    ns = _build_parser().parse_args(["gc-ledger"])
+    assert ns._special == "gc_ledger" and ns.apply is False
+    ns = _build_parser().parse_args(["gc-ledger", "--apply"])
+    assert ns.apply is True

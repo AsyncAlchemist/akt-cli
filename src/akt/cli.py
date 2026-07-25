@@ -226,6 +226,12 @@ def _build_parser() -> argparse.ArgumentParser:
         p.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD")
         p.set_defaults(_special=sp)
 
+    gp = sub.add_parser("gc-ledger", parents=[common],
+                        help="Report/remove orphaned ledger rows (needs the akt-api module)")
+    gp.add_argument("--apply", action="store_true",
+                    help="delete the orphaned rows (default: report only)")
+    gp.set_defaults(_special="gc_ledger")
+
     return parser
 
 
@@ -444,6 +450,23 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
             print(f"  {'Net income to date':>40}  {bs['net_income']:>12,.2f}")
             print("  BALANCED" if bs["balanced"] else "  *** DOES NOT BALANCE")
         return 0 if bs["balanced"] else 1
+    if name == "gc_ledger":
+        _need_akt_api(client, "gc-ledger")
+        rep = client.get("akt-api/ledgers/orphans")
+        data = rep.get("data", rep) if isinstance(rep, dict) else rep
+        total = data.get("total", 0)
+        if not ns.apply:
+            if ns.json:
+                emit(data, as_json=True)
+            else:
+                for t, c in (data.get("by_type") or {}).items():
+                    print(f"  {c:>6}  {t}")
+                print(f"{total} orphaned ledger row(s). Run with --apply to delete.")
+            return 0
+        res = client.request("DELETE", "akt-api/ledgers/orphans")
+        d = res.get("data", res) if isinstance(res, dict) else res
+        print(f"deleted {d.get('deleted', 0)} orphaned ledger row(s).")
+        return 0
     raise ValueError(name)
 
 
