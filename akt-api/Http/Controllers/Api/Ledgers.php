@@ -23,7 +23,7 @@ class Ledgers extends ApiController
     public function __construct()
     {
         $this->middleware('permission:read-double-entry-chart-of-accounts')->only('index', 'orphans');
-        $this->middleware('permission:update-double-entry-chart-of-accounts')->only('update', 'pruneOrphans');
+        $this->middleware('permission:update-double-entry-chart-of-accounts')->only('update', 'pruneOrphans', 'split');
     }
 
     /**
@@ -151,5 +151,100 @@ class Ledgers extends ApiController
             (array) $row,
             ['account_id' => (int) $request->input('account_id')]
         ));
+    }
+
+    /**
+     * Split one item-leg posting into N item legs (a multi-GL "split" transaction).
+     *
+     * DoubleEntry posts a standalone transaction as exactly one item leg
+     * (`de_account_id`) + one total (bank) leg — a bank transaction can't natively
+     * carry multiple GL accounts the way an invoice's line items do. This fans the
+     * single item leg out into N item legs by writing directly to the ledger table
+     * (same table + query-builder discipline as `update()` above), so one bank
+     * transaction can post to several GL accounts.
+     *
+     * The `total` (bank) leg is never touched; the new legs MUST net to the original
+     * item leg's `(debit - credit)` so the entry stays balanced. Each new row is
+     * templated off the existing row, so every DoubleEntry column (created_from,
+     * created_by, ledgerable_*, issued_at, entry_type, …) is reproduced exactly —
+     * only account_id/debit/credit are overridden. Restricted to `entry_type = 'item'`
+     * and refuses a transaction that is already split; company-scoped throughout.
+     *
+     * @param  int|string  $id  the id of the (single) item-leg row to split
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function split(Request $request, $id)
+    {
+        $request->validate([
+            'legs'              => 'required|array|min:1',
+            'legs.*.account_id' => 'required|integer',
+            'legs.*.debit'      => 'nullable|numeric',
+            'legs.*.credit'     => 'nullable|numeric',
+        ]);
+
+        $row = DB::table('double_entry_ledger')
+            ->where('id', (int) $id)
+            ->where('company_id', company_id())
+            ->first();
+
+        if (! $row) {
+            return $this->errorInternal('ledger row ' . $id . ' not found');
+        }
+        if ($row->entry_type !== 'item') {
+            return $this->errorInternal("only item-leg rows may be split (row {$id} is '{$row->entry_type}')");
+        }
+
+        // Refuse if this transaction already has more than one item leg (already
+        // split) — keeps the operation unambiguous and safe to retry.
+        $itemLegCount = DB::table('double_entry_ledger')
+            ->where('company_id', company_id())
+            ->where('ledgerable_type', $row->ledgerable_type)
+            ->where('ledgerable_id', $row->ledgerable_id)
+            ->where('entry_type', 'item')
+            ->count();
+        if ($itemLegCount !== 1) {
+            return $this->errorInternal("transaction already has {$itemLegCount} item legs; refusing to split (row {$id})");
+        }
+
+        // Balance rule: the new legs' net (debit - credit) must equal the row's, so
+        // the untouched total (bank) leg keeps the whole entry balanced.
+        $legs = $request->input('legs');
+        $sumDebit = 0.0;
+        $sumCredit = 0.0;
+        foreach ($legs as $leg) {
+            $sumDebit  += (float) ($leg['debit'] ?? 0);
+            $sumCredit += (float) ($leg['credit'] ?? 0);
+        }
+        $newNet = round($sumDebit - $sumCredit, 4);
+        $oldNet = round((float) $row->debit - (float) $row->credit, 4);
+        if (abs($newNet - $oldNet) > 0.0001) {
+            return $this->errorInternal("split legs net {$newNet} != item-leg net {$oldNet}; would unbalance the entry");
+        }
+
+        $inserted = [];
+        DB::transaction(function () use ($row, $legs, &$inserted) {
+            $template = (array) $row;
+            unset($template['id']);
+            $now = now();
+            foreach ($legs as $leg) {
+                $debit  = (float) ($leg['debit'] ?? 0);
+                $credit = (float) ($leg['credit'] ?? 0);
+                $newRow = array_merge($template, [
+                    'account_id' => (int) $leg['account_id'],
+                    'debit'      => $debit > 0 ? $debit : null,
+                    'credit'     => $credit > 0 ? $credit : null,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                $newRow['id'] = DB::table('double_entry_ledger')->insertGetId($newRow);
+                $inserted[] = (object) $newRow;
+            }
+            DB::table('double_entry_ledger')
+                ->where('id', $row->id)
+                ->where('company_id', company_id())
+                ->delete();
+        });
+
+        return Resource::collection(collect($inserted));
     }
 }

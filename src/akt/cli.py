@@ -48,6 +48,15 @@ def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bo
         p.add_argument("--item", action="append", metavar="K=V,...",
                        help="ledger line (>= 2, must balance), e.g. "
                             "'account_id=10,debit=100' or 'account_id=20,credit=100' (repeatable)")
+    elif res.endpoint == "transactions" and not for_update:
+        p.add_argument("--split", action="append", metavar="account=CODE,debit|credit=X",
+                       help="split the GL posting across multiple accounts (repeatable): "
+                            "one bank transaction that posts N GL item legs, the way an "
+                            "invoice's line items do. e.g. 'account=400,credit=13686' "
+                            "'account=545,debit=280'. Legs must net to --amount; needs a "
+                            "--coa config and the akt-api companion module. category_id "
+                            "stays a single label — the DoubleEntry GL (item legs) is the "
+                            "source of truth.")
     if res.supports_attachments:
         p.add_argument("--attachment", action="append", metavar="PATH",
                        help="attach a file (pdf/jpg/png, repeatable); switches the "

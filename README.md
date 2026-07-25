@@ -244,6 +244,27 @@ agree. `--account` takes a GL code or name; `--category` a mirror-category name
 (see `--bank` for the bank/cash account). An explicit `--set de_account_id=` still
 wins.
 
+### Split one transaction across several GL accounts
+
+`--split` posts **one bank transaction to multiple GL accounts at once** — the way
+an invoice's line items each hit their own account. Repeat it per leg as
+`account=<code|name>,debit=<x>` or `account=<code|name>,credit=<x>`; the legs must
+net to `--amount` (income legs credit-heavy, expense legs debit-heavy):
+
+```bash
+# one $13,400 PayPro deposit that books gross revenue, a refund and a fee together
+akt payment create --type income --bank 20 --amount 13400 \
+    --split 'account=400,credit=13686' \
+    --split 'account=545,debit=280' \
+    --split 'account=605,debit=6'
+```
+
+Needs the [`akt-api` companion module](akt-api/) — it writes the extra DoubleEntry
+item legs (a standalone transaction can't natively carry more than one). The
+transaction keeps a **single `category_id`**, a label just like a multi-item
+invoice's, so Akaunting's native category report shows it under one bucket; the
+**DoubleEntry GL (the item legs) is the source of truth**.
+
 **Enforcement (when a `--coa` config is loaded):** akt refuses to create a
 *standalone* income/expense transaction that has no GL account — you must pass
 `--account`, `--category`, or an explicit `--set de_account_id=`. This makes the

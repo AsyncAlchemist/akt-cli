@@ -27,5 +27,9 @@ Route::group([
         // Orphaned ledger rows (ledgerable soft-deleted/missing) — report + prune.
         Route::get('akt-api/ledgers/orphans', 'Ledgers@orphans')->name('akt-api.ledgers.orphans');
         Route::delete('akt-api/ledgers/orphans', 'Ledgers@pruneOrphans')->name('akt-api.ledgers.prune-orphans');
+        // Split: fan one item-leg posting out into N item legs (a multi-GL "split"
+        // transaction, the way an invoice's line items post). The total (bank) leg
+        // is untouched; the new legs must net to the original so the entry balances.
+        Route::post('akt-api/ledgers/{id}/split', 'Ledgers@split')->name('akt-api.ledgers.split');
     });
 });
