@@ -24,6 +24,7 @@ from .resources import Resource, load_data_arg
 from .coa import load_coa, plan_sync, render_plan, apply_plan
 from .ledger import resolve_account_id
 from .verify import find_miscodings, build_recode_plan
+from . import reports
 
 
 def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bool) -> None:
@@ -202,7 +203,49 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="show the plan without writing anything")
     rcp.set_defaults(_special="recode")
 
+    bp = sub.add_parser("balance", parents=[common],
+                        help="Show one account's balance (needs the akt-api module)")
+    bp.add_argument("--account", required=True, metavar="CODE|NAME")
+    bp.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD")
+    bp.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD")
+    bp.add_argument("--expected", type=float, metavar="AMOUNT",
+                    help="reconcile: compare to this figure, exit 1 on mismatch")
+    bp.set_defaults(_special="balance")
+
+    tp = sub.add_parser("trial-balance", parents=[common],
+                        help="Trial balance (needs the akt-api module)")
+    tp.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD")
+    tp.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD")
+    tp.set_defaults(_special="trial_balance")
+
+    rpp = sub.add_parser("report", parents=[common], help="Financial reports (needs the akt-api module)")
+    rpv = rpp.add_subparsers(dest="report_verb", metavar="<report>")
+    for verb, sp in (("profit-loss", "report_pnl"), ("balance-sheet", "report_bs")):
+        p = rpv.add_parser(verb, parents=[common])
+        p.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD")
+        p.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD")
+        p.set_defaults(_special=sp)
+
     return parser
+
+
+def _need_akt_api(client: Client, cmd: str) -> None:
+    if not client.has_ledger_api():
+        raise ValueError(f"`akt {cmd}` needs the akt-api companion module — "
+                         "install it into your Akaunting modules/ directory (see akt-api/README.md)")
+
+
+def _fetch_balances(client: Client, ns: Any):
+    accounts = client.list("chart-of-accounts", all_pages=True)
+    accts_by_id = {a["id"]: {"code": a.get("code"), "name": a.get("name"),
+                             "type_id": a.get("type_id")} for a in accounts}
+    params: dict[str, Any] = {}
+    if getattr(ns, "date_from", None):
+        params["date_from"] = ns.date_from
+    if getattr(ns, "date_to", None):
+        params["date_to"] = ns.date_to
+    rows = client.list("akt-api/balances", all_pages=True, params=params or None)
+    return reports.balances_by_id(rows), accts_by_id, accounts
 
 
 def _run_special(name: str, client: Client, ns: Any) -> int:
@@ -344,6 +387,63 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
             done += 1
         print(f"recoded {done} transaction(s).")
         return 0
+    if name == "balance":
+        _need_akt_api(client, "balance")
+        balances, accts_by_id, accounts = _fetch_balances(client, ns)
+        account_id = resolve_account_id(accounts, ns.account)
+        bal = balances.get(account_id, 0.0)
+        if ns.expected is not None:
+            r = reports.reconcile(bal, ns.expected)
+            emit(r, as_json=ns.json,
+                 columns=None if ns.json else ["actual", "expected", "diff", "ok"],
+                 headers=["Balance", "Expected", "Diff", "OK"])
+            return 0 if r["ok"] else 1
+        emit({"account_id": account_id, "balance": round(bal, 2)}, as_json=ns.json,
+             columns=None if ns.json else ["account_id", "balance"],
+             headers=["Account", "Balance"])
+        return 0
+    if name == "trial_balance":
+        _need_akt_api(client, "trial-balance")
+        balances, accts_by_id, _ = _fetch_balances(client, ns)
+        tb = reports.build_trial_balance(balances, accts_by_id)
+        if ns.json:
+            emit(tb, as_json=True)
+        else:
+            emit(tb["rows"], as_json=False, columns=["code", "name", "debit", "credit"],
+                 headers=["Code", "Account", "Debit", "Credit"])
+            print(f"  {'TOTAL':>34}  {tb['total_debit']:>12,.2f}  {tb['total_credit']:>12,.2f}")
+            print("  BALANCED" if tb["balanced"] else "  *** OUT OF BALANCE")
+        return 0 if tb["balanced"] else 1
+    if name == "report_pnl":
+        _need_akt_api(client, "report profit-loss")
+        balances, accts_by_id, _ = _fetch_balances(client, ns)
+        pl = reports.build_profit_loss(balances, accts_by_id)
+        if ns.json:
+            emit(pl, as_json=True)
+        else:
+            print("INCOME")
+            emit(pl["income"], as_json=False, columns=["code", "name", "amount"], headers=["Code", "Account", "Amount"])
+            print(f"  {'Total income':>40}  {pl['total_income']:>12,.2f}\n\nEXPENSES")
+            emit(pl["expense"], as_json=False, columns=["code", "name", "amount"], headers=["Code", "Account", "Amount"])
+            print(f"  {'Total expenses':>40}  {pl['total_expense']:>12,.2f}")
+            print(f"  {'NET PROFIT':>40}  {pl['net_profit']:>12,.2f}")
+        return 0
+    if name == "report_bs":
+        _need_akt_api(client, "report balance-sheet")
+        balances, accts_by_id, _ = _fetch_balances(client, ns)
+        bs = reports.build_balance_sheet(balances, accts_by_id)
+        if ns.json:
+            emit(bs, as_json=True)
+        else:
+            for title, key, tot in (("ASSETS", "assets", "total_assets"),
+                                    ("LIABILITIES", "liabilities", "total_liabilities"),
+                                    ("EQUITY", "equity", "total_equity")):
+                print(title)
+                emit(bs[key], as_json=False, columns=["code", "name", "amount"], headers=["Code", "Account", "Amount"])
+                print(f"  {'Total ' + title.lower():>40}  {bs[tot]:>12,.2f}\n")
+            print(f"  {'Net income to date':>40}  {bs['net_income']:>12,.2f}")
+            print("  BALANCED" if bs["balanced"] else "  *** DOES NOT BALANCE")
+        return 0 if bs["balanced"] else 1
     raise ValueError(name)
 
 

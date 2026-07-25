@@ -62,3 +62,17 @@ def test_reconcile():
     assert reconcile(700.0, 700.0)["ok"] is True
     r = reconcile(700.0, 650.0)
     assert r["ok"] is False and r["diff"] == 50.0
+
+
+from akt.cli import _build_parser
+
+
+def test_report_commands_parse():
+    ns = _build_parser().parse_args(["balance", "--account", "105", "--to", "2025-12-31", "--expected", "5170.84"])
+    assert ns._special == "balance" and ns.account == "105" and ns.expected == 5170.84
+    ns = _build_parser().parse_args(["trial-balance", "--to", "2025-12-31"])
+    assert ns._special == "trial_balance" and ns.date_to == "2025-12-31"
+    ns = _build_parser().parse_args(["report", "profit-loss", "--from", "2025-01-01", "--to", "2025-12-31"])
+    assert ns._special == "report_pnl"
+    ns = _build_parser().parse_args(["report", "balance-sheet", "--to", "2025-12-31"])
+    assert ns._special == "report_bs"

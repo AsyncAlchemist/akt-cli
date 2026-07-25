@@ -259,6 +259,24 @@ akt company
 akt settings --search 'key:default.account'
 ```
 
+## Financial reports (needs the akt-api module)
+
+Akaunting's trial balance, P&L, and balance sheet aren't in its JSON API. With
+the companion module installed, akt computes them from the ledger:
+
+```bash
+akt trial-balance --to 2025-12-31                 # every account, debits = credits
+akt report profit-loss --from 2025-01-01 --to 2025-12-31
+akt report balance-sheet --to 2025-12-31
+akt balance --account 105 --to 2025-12-31         # one account's balance
+akt balance --account 200 --to 2025-12-31 --expected 0   # reconcile: exit 1 on mismatch
+```
+
+`--expected` turns `akt balance` into a reconciliation primitive (compare an
+account to an external figure, non-zero exit on a mismatch). Balances aggregate
+through Akaunting's ledger relation, so soft-deleted transactions are excluded
+just as its own reports do.
+
 ## Reading the ledger: the `akt-api` companion module
 
 Akaunting's Double-Entry app exposes only `journal-entry` and `chart-of-accounts`
