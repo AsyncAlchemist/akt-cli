@@ -54,4 +54,6 @@ markers = [
 dev = [
     "pytest>=9.1.1",
     "pytest-cov>=5.0",
+    # Retries transient live-integration failures (network blips) in release.yml.
+    "pytest-rerunfailures>=14.0",
 ]

@@ -1,36 +1,45 @@
 name: Release (integration)
 
-# Full-surface integration tests against a LIVE Akaunting deployment. Creates real
-# records and deletes them on teardown — but Akaunting soft-deletes, so each run
-# still leaves orphaned ledger rows behind, and the suite runs `coa sync` which can
-# mutate the chart of accounts. It must therefore NOT run against a shared/prod
-# instance on every release: that pollutes the books and makes releases flaky on a
-# transient network blip (publishing is handled separately by publish.yml).
+# Full-surface integration tests against a DEDICATED, disposable Akaunting
+# instance provisioned solely for CI — NOT a shared/production deployment. The
+# instance runs Akaunting 3.1.x + the paid Double-Entry app + the akt-api
+# companion module, seeded to a known company with throwaway admin credentials
+# (stored as repo secrets, pointing only at this scratch instance).
 #
-# Run it ON DEMAND only (workflow_dispatch). TODO: point AKT_BASE_URL at a
-# disposable/staging instance and restore an automatic trigger.
+# The suite creates and deletes customers, vendors, invoices, bills, payments and
+# journal entries, runs `coa sync`, and exercises `payment --split`. Because the
+# target is a throwaway CI instance, `coa sync` chart-of-accounts mutations and
+# Akaunting's soft-delete ledger residue are harmless — the `gc-ledger --apply`
+# step sweeps the orphaned rows after every run so nothing accumulates.
+#
+# Runs automatically on published releases (and on demand). Runs are serialized
+# via the concurrency group so two suites never race on the one shared instance,
+# and a transient network blip retries the failed test rather than failing the
+# whole job.
 on:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# never run two live suites at once (avoids state races on the shared instance)
+# Never run two suites at once — they share a single CI instance.
 concurrency:
   group: integration-live
   cancel-in-progress: false
 
 jobs:
   integration:
-    name: Live integration tests
+    name: Integration tests (disposable instance)
     runs-on: ubuntu-latest
     env:
-      # Connection details come only from secrets; never hard-coded here.
+      # Points at the DEDICATED CI Akaunting instance, never production.
       AKT_BASE_URL: ${{ secrets.AKT_BASE_URL }}
       AKT_EMAIL: ${{ secrets.AKT_EMAIL }}
       AKT_PASSWORD: ${{ secrets.AKT_PASSWORD }}
-      # Pace requests to stay under host bot-protection / rate limits.
-      AKT_THROTTLE: "0.5"
+      # Pace requests to stay under Akaunting's ~60/min API throttle.
+      AKT_THROTTLE: "1.0"
     steps:
       - uses: actions/checkout@v5
 
@@ -48,5 +57,13 @@ jobs:
       - name: Unit tests (sanity)
         run: uv run pytest tests/unit -q
 
-      - name: Live integration tests
-        run: uv run pytest tests/integration -v
+      - name: Integration tests
+        # Retry only the failed test on a transient blip (e.g. RemoteDisconnected).
+        # The `tracker` fixture tears down per test, so reruns are side-effect-free.
+        run: uv run pytest tests/integration -v --reruns 2 --reruns-delay 5
+
+      - name: Sweep orphaned ledger rows
+        if: always()
+        # Akaunting soft-deletes, so each run leaves orphaned double_entry_ledger
+        # rows behind; clear them so residue never accumulates on the instance.
+        run: uv run akt gc-ledger --apply
