@@ -23,6 +23,7 @@ from .registry import RESOURCES, BY_NOUN
 from .resources import Resource, load_data_arg
 from .coa import load_coa, plan_sync, render_plan, apply_plan
 from .ledger import resolve_account_id
+from .verify import find_miscodings
 
 
 def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bool) -> None:
@@ -185,6 +186,13 @@ def _build_parser() -> argparse.ArgumentParser:
     lp.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="Latest issued_at")
     lp.set_defaults(_special="ledger")
 
+    vp = sub.add_parser("verify", parents=[common],
+                        help="Audit standalone income/expense postings vs their category "
+                             "(needs akt-api + --coa)")
+    vp.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="Earliest paid_at")
+    vp.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="Latest paid_at")
+    vp.set_defaults(_special="verify")
+
     return parser
 
 
@@ -251,6 +259,38 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
         emit(rows, as_json=ns.json, columns=None if ns.json else cols,
              headers=["Date", "Type", "Debit", "Credit", "Source", "Source ID"])
         return 0
+    if name == "verify":
+        coa = ns._coa
+        if coa is None:
+            raise ValueError("`akt verify` needs a COA config (use --coa FILE or set AKT_COA_FILE)")
+        if not client.has_ledger_api():
+            raise ValueError("`akt verify` needs the akt-api companion module — "
+                             "install it into your Akaunting modules/ directory (see akt-api/README.md)")
+
+        txns = [t for t in client.list("transactions", all_pages=True)
+                if t.get("type") in ("income", "expense") and not t.get("document_id")]
+        if ns.date_from:
+            txns = [t for t in txns if str(t.get("paid_at", ""))[:10] >= ns.date_from]
+        if ns.date_to:
+            txns = [t for t in txns if str(t.get("paid_at", ""))[:10] <= ns.date_to]
+
+        categories_by_id = {c["id"]: {"name": c.get("name"), "type": c.get("type")}
+                            for c in client.list("categories", all_pages=True)}
+        accounts = client.list("chart-of-accounts", all_pages=True)
+        accounts_by_id = {a["id"]: {"code": a.get("code"), "name": a.get("name")} for a in accounts}
+        accounts_by_code = {int(a["code"]): a["id"] for a in accounts if a.get("code") is not None}
+
+        item_ledgers = client.list("akt/ledgers", all_pages=True, params={
+            "ledgerable_type": "App\\Models\\Banking\\Transaction", "entry_type": "item"})
+        item_account_by_txn = {int(l["ledgerable_id"]): int(l["account_id"]) for l in item_ledgers}
+
+        findings = find_miscodings(txns, categories_by_id, accounts_by_id,
+                                   accounts_by_code, item_account_by_txn, coa)
+        cols = ["transaction_id", "paid_at", "amount", "category",
+                "expected_code", "actual_code", "reason"]
+        emit(findings, as_json=ns.json, columns=None if ns.json else cols,
+             headers=["Txn", "Date", "Amount", "Category", "Expected", "Actual", "Reason"])
+        return 0 if not findings else 1
     raise ValueError(name)
 
 

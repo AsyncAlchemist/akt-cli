@@ -258,7 +258,19 @@ it's not, they print an install hint and everything else works unchanged.
 ```bash
 # Show what actually posted to a GL account (by code or name):
 akt ledger --account 628 --from 2025-01-01 --to 2025-12-31
+
+# Audit: every standalone income/expense transaction whose ACTUAL posted GL
+# account differs from the account that mirrors its category. Needs a --coa
+# config (to know the mapping) and the companion module (to read the ledger).
+# Exits non-zero when it finds mis-postings — handy in CI / a pre-close gate.
+akt --coa coa.toml verify --from 2025-01-01 --to 2025-12-31
 ```
+
+Because the Double-Entry module posts to the ledger by `de_account_id`, not by
+category, a transaction can carry a tidy category yet post to the wrong GL
+account (e.g. the module's default "Other / Uncategorized"). `akt verify` is how
+you catch that — the category report and the COA report only agree when it comes
+back clean.
 
 ## Akaunting gotchas `akt` handles for you
 
