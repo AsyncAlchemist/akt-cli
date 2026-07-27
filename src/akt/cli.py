@@ -282,6 +282,22 @@ def _fetch_balances(client: Client, ns: Any):
     return reports.balances_by_id(rows), accts_by_id, accounts
 
 
+def _fetch_type_class(client: Client) -> "dict[int, int]":
+    """type_id -> class_id, pulled from the installation (akt-api/account-types).
+    Empty when the module lacks the endpoint — reports fall back to the seeds."""
+    try:
+        rows = client.list("akt-api/account-types")
+    except ApiError:
+        return {}
+    out: dict[int, int] = {}
+    for r in rows:
+        try:
+            out[int(r["type_id"])] = int(r["class_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
 def _convert_amount(client: Client, amount: float, code: str, rate: float) -> "float | None":
     """Base-currency value of ``amount`` in ``code`` at ``rate`` (= amount / rate,
     Akaunting's convertToDefault). Prefer the installation's own trait via the
@@ -352,15 +368,19 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
                              "install it into your Akaunting modules/ directory (see akt-api/README.md)")
         accounts = client.list("chart-of-accounts", all_pages=True)
         account_id = resolve_account_id(accounts, ns.account)
-        params: dict = {"account_id": account_id}
+        # convert=1 makes akt-api annotate each row with its source currency and the
+        # base-currency amount, so we show foreign legs AS POSTED plus an unambiguous
+        # converted column (rather than mislabelling foreign face values as base).
+        params: dict = {"account_id": account_id, "convert": 1}
         if ns.date_from:
             params["issued_from"] = ns.date_from
         if ns.date_to:
             params["issued_to"] = ns.date_to
         rows = client.list("akt-api/ledgers", params=params, all_pages=True)
-        cols = ["issued_at", "entry_type", "debit", "credit", "ledgerable_type", "ledgerable_id"]
+        cols = ["issued_at", "currency_code", "debit", "credit",
+                "debit_converted", "credit_converted", "entry_type"]
         emit(rows, as_json=ns.json, columns=None if ns.json else cols,
-             headers=["Date", "Type", "Debit", "Credit", "Source", "Source ID"])
+             headers=["Date", "Cur", "Debit", "Credit", "Debit(base)", "Credit(base)", "Type"])
         return 0
     if name == "verify":
         coa = ns._coa
@@ -403,7 +423,8 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
             accounts_by_code = {int(a["code"]): a["id"] for a in accounts if a.get("code") is not None}
             findings += find_miscodings(txns, categories_by_id, accounts_by_id,
                                         accounts_by_code, item_account_by_txn, coa)
-            findings += find_report_dropped(txns, item_account_by_txn, accounts_by_id)
+            findings += find_report_dropped(txns, item_account_by_txn, accounts_by_id,
+                                            _fetch_type_class(client))
 
         for f in findings:
             f.setdefault("bank", None)
@@ -486,7 +507,7 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
     if name == "report_pnl":
         _need_akt_api(client, "report profit-loss")
         balances, accts_by_id, _ = _fetch_balances(client, ns)
-        pl = reports.build_profit_loss(balances, accts_by_id)
+        pl = reports.build_profit_loss(balances, accts_by_id, _fetch_type_class(client))
         if ns.json:
             emit(pl, as_json=True)
         else:
@@ -500,7 +521,7 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
     if name == "report_bs":
         _need_akt_api(client, "report balance-sheet")
         balances, accts_by_id, _ = _fetch_balances(client, ns)
-        bs = reports.build_balance_sheet(balances, accts_by_id)
+        bs = reports.build_balance_sheet(balances, accts_by_id, _fetch_type_class(client))
         if ns.json:
             emit(bs, as_json=True)
         else:

@@ -29,6 +29,19 @@ def test_account_class_and_unknown_warns(capsys):
     assert "type_id 99" in capsys.readouterr().err
 
 
+def test_account_class_prefers_server_map():
+    assert account_class(99, {99: 4}) == 4     # custom type resolved via the installation map
+    assert account_class(6, {6: 4}) == 4       # server map is authoritative, overrides the seed
+    assert account_class(6, {99: 4}) == 1      # map lacks 6 -> falls back to the seed (asset)
+
+
+def test_profit_loss_uses_server_type_class_map():
+    accts = {50: {"code": 900, "name": "Custom Rev", "type_id": 99}}
+    balances = {50: -500.0}                     # credit balance
+    assert build_profit_loss(balances, accts)["total_income"] == 0.0        # 99 unknown -> excluded
+    assert build_profit_loss(balances, accts, {99: 4})["total_income"] == 500.0  # mapped -> income
+
+
 def test_balances_by_id():
     assert balances_by_id(_ROWS) == {10: 700.0, 20: -1000.0, 30: 300.0}
 
