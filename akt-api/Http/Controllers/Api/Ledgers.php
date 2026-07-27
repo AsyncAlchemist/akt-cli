@@ -109,7 +109,60 @@ class Ledgers extends ApiController
         $rows = $query->orderBy('issued_at')->orderBy('id')
             ->paginate((int) $request->input('limit', 100));
 
+        // Opt-in (?convert=1): annotate each row with its source currency and the
+        // base-currency amount (base = amount / currency_rate, Akaunting's
+        // convertToDefault, applied to each ledgerable's stored historical rate).
+        // Lets `akt ledger` show foreign amounts AS POSTED plus an unambiguous
+        // converted column, rather than General Ledger's silently-mislabelled sum.
+        if ($request->boolean('convert')) {
+            $this->attachConverted($rows->getCollection());
+        }
+
         return Resource::collection($rows);
+    }
+
+    /**
+     * Batch-annotate ledger rows with `currency_code` + converted debit/credit,
+     * pulling each ledgerable's currency from its own table (grouped by morph type
+     * so it stays O(types), not O(rows)). Unknown types fall back to the default
+     * currency at rate 1 — harmless, since those legs are already base-currency.
+     */
+    private function attachConverted($items): void
+    {
+        $tableFor = [
+            'App\\Models\\Banking\\Transaction'     => 'transactions',
+            'App\\Models\\Document\\Document'        => 'documents',
+            'Modules\\DoubleEntry\\Models\\Journal'  => 'double_entry_journals',
+        ];
+
+        $byType = [];
+        foreach ($items as $r) {
+            $byType[$r->ledgerable_type][] = (int) $r->ledgerable_id;
+        }
+
+        $info = [];  // "type#id" => [code, rate]
+        foreach ($byType as $type => $ids) {
+            $table = $tableFor[$type] ?? null;
+            if (! $table) {
+                continue;
+            }
+            $recs = DB::table($table)->whereIn('id', array_values(array_unique($ids)))
+                ->get(['id', 'currency_code', 'currency_rate']);
+            foreach ($recs as $rec) {
+                $info[$type . '#' . $rec->id] = [
+                    $rec->currency_code ?: default_currency(),
+                    ((float) $rec->currency_rate) ?: 1.0,
+                ];
+            }
+        }
+
+        foreach ($items as $r) {
+            [$code, $rate] = $info[$r->ledgerable_type . '#' . $r->ledgerable_id]
+                ?? [default_currency(), 1.0];
+            $r->currency_code    = $code;
+            $r->debit_converted  = $r->debit  === null ? null : round(((float) $r->debit) / $rate, 4);
+            $r->credit_converted = $r->credit === null ? null : round(((float) $r->credit) / $rate, 4);
+        }
     }
 
     /**
