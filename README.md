@@ -305,6 +305,68 @@ akt company
 akt settings --search 'key:default.account'
 ```
 
+## Foreign currency
+
+Akaunting stores every transaction in its own currency plus a `currency_rate`
+snapshot (foreign units per 1 unit of the company default currency); the base
+value is `amount ÷ currency_rate`. In the web UI that rate is auto-filled from
+the currency's live rate — but over the API you must supply it, and akt used to
+default it to `1`, silently mis-stating any foreign transaction. akt now fetches
+the right rate for you, **for the transaction's own date**, from keyless public
+feeds:
+
+* **majors** (~30 ECB currencies) — [Frankfurter](https://frankfurter.dev)
+* **ARS** (Argentine peso, which ECB doesn't publish) — historical by date from
+  [ArgentinaDatos](https://argentinadatos.com), latest from
+  [dolarapi.com](https://dolarapi.com), with a selectable *casa*
+  (oficial/blue/bolsa[MEP]/contadoconliqui[CCL]/…) and price side.
+
+```bash
+# Auto-fills currency_rate for the payment's date (paid_at). No extra flags.
+akt payment create --type expense --bank 3 --amount 100 --currency-code EUR
+
+# Back-dated entry books at that day's historical rate:
+akt bill create --contact 13 --currency-code EUR \
+    --item 'name=Hosting,price=100,quantity=1' --issued-at 2025-06-02
+
+# Argentine peso, defaulting to the MEP (bolsa) rate at the mid price:
+akt payment create --type expense --bank 5 --amount 500000 --currency-code ARS
+# ...or pick the rate type / side per transaction:
+akt payment create --type expense --bank 5 --amount 500000 --currency-code ARS \
+    --ars-casa blue --ars-side venta
+
+# Override or opt out:
+akt payment create ... --currency-code EUR --currency-rate 0.905   # pin it yourself
+akt payment create ... --currency-code EUR --no-auto-rate          # store 1 (legacy)
+akt payment create ... --currency-code EUR --rate-date 2025-06-30   # a different rate date
+```
+
+If a rate can't be resolved (offline, feed down, an unsupported currency, or a
+future date) akt **fails loudly** rather than booking at `1` — pass
+`--currency-rate` to set it manually. Historical rates are cached under
+`~/.cache/akt/fx/`; set `AKT_FX_DISABLE=1` to force fully offline.
+
+Preview or convert a rate without touching a transaction:
+
+```bash
+akt fx EUR                          # latest EUR per 1 default-currency, and the inverse
+akt fx ARS --on 2025-06-02          # historical, MEP/mid by default
+akt fx ARS --ars-casa blue --amount 500000   # convert 500,000 ARS to the base currency
+```
+
+**Reporting.** With the companion module updated (see below), akt's reports
+mirror Akaunting exactly: `trial-balance`, `report profit-loss`, `report
+balance-sheet` and `balance` are computed **in the company default currency**,
+converting each ledger leg at its historical rate the way Akaunting's own
+statements do — so a EUR or ARS posting is no longer summed at face value.
+`akt ledger` shows each leg **as posted** (its own currency) alongside a
+converted column, so nothing is silently mislabelled. Defaults: ARS casa `bolsa`
+(MEP), price `mid`; override globally with `AKT_FX_ARS_CASA` / `AKT_FX_ARS_SIDE`.
+
+> The reporting fix lives in the **akt-api** companion module — update it in your
+> Akaunting `modules/` directory (see `akt-api/README.md`) for base-currency
+> reports. The rate-input feature above needs only the CLI.
+
 ## Financial reports (needs the akt-api module)
 
 Akaunting's trial balance, P&L, and balance sheet aren't in its JSON API. With
