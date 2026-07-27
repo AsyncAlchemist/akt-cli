@@ -38,8 +38,12 @@ _ARS_CASAS = {"oficial", "blue", "bolsa", "contadoconliqui", "cripto",
 _ARS_SIDES = {"mid", "venta", "compra"}
 
 
-class FxError(Exception):
-    """A rate could not be resolved (unsupported currency, feed down, offline)."""
+class FxError(ValueError):
+    """A rate could not be resolved (unsupported currency, feed down, offline).
+
+    Subclasses ValueError so the CLI's top-level handler surfaces it as a normal
+    ``error: ...`` (exit 1) rather than an uncaught traceback.
+    """
 
 
 def _http_get_json(url: str) -> Any:

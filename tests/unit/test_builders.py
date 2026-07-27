@@ -7,6 +7,7 @@ payment body construction, item parsing, and the argparse namespace wiring
 
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -288,6 +289,83 @@ def test_delete_standalone_payment_uses_flat_route():
         "2": {"id": 2, "type": "income", "document_id": None},
     })
     assert resolve_payment_delete(PAYMENT, client, "2") == ("transactions/2", None)
+
+
+# --------------------------------------------------------------------------
+# foreign-currency rate auto-fill (fx)
+# --------------------------------------------------------------------------
+
+def _no_fetch(*a, **k):
+    raise AssertionError("resolve_rate should not have been called")
+
+
+def test_payment_foreign_currency_autofills_rate(monkeypatch):
+    import akt.resources as R
+    seen = {}
+
+    def fake_resolve(default, code, on, **kw):
+        seen.update(default=default, code=code)
+        return Decimal("0.9")
+
+    monkeypatch.setattr(R.fx, "resolve_rate", fake_resolve)
+    client = FakeClient(settings={"default.income_category": "2", "default.account": "1",
+                                  "default.currency": "USD"})
+    ns = _payment_ns(type="income", amount=100, currency_code="EUR", paid_at="2025-06-02")
+    body = build_payment_create(PAYMENT, client, ns)
+    assert body["currency_code"] == "EUR"
+    assert body["currency_rate"] == 0.9          # fetched, not 1
+    assert seen == {"default": "USD", "code": "EUR"}
+
+
+def test_payment_explicit_rate_wins_without_fetch(monkeypatch):
+    import akt.resources as R
+    monkeypatch.setattr(R.fx, "resolve_rate", _no_fetch)
+    client = FakeClient(settings={"default.income_category": "2", "default.account": "1",
+                                  "default.currency": "USD"})
+    ns = _payment_ns(type="income", amount=100, currency_code="EUR", currency_rate="0.5")
+    assert build_payment_create(PAYMENT, client, ns)["currency_rate"] == 0.5
+
+
+def test_payment_default_currency_is_rate_one_without_fetch(monkeypatch):
+    import akt.resources as R
+    monkeypatch.setattr(R.fx, "resolve_rate", _no_fetch)
+    client = FakeClient(settings={"default.income_category": "2", "default.account": "1",
+                                  "default.currency": "USD"})
+    ns = _payment_ns(type="income", amount=100, currency_code="USD")
+    assert build_payment_create(PAYMENT, client, ns)["currency_rate"] == 1.0
+
+
+def test_payment_no_auto_rate_flag_forces_one(monkeypatch):
+    import akt.resources as R
+    monkeypatch.setattr(R.fx, "resolve_rate", _no_fetch)
+    client = FakeClient(settings={"default.income_category": "2", "default.account": "1",
+                                  "default.currency": "USD"})
+    ns = _payment_ns(type="income", amount=100, currency_code="EUR", no_auto_rate=True)
+    assert build_payment_create(PAYMENT, client, ns)["currency_rate"] == 1.0
+
+
+def test_invoice_foreign_currency_autofills_rate(monkeypatch):
+    import akt.resources as R
+    monkeypatch.setattr(R.fx, "resolve_rate", lambda *a, **k: Decimal("1175"))
+    client = FakeClient(
+        contacts={"5": {"id": 5, "name": "N", "currency_code": "ARS"}},
+        settings={"default.income_category": "2", "default.currency": "USD"},
+        docs_list=[],
+    )
+    ns = _invoice_ns(contact="5", currency_code="ARS", issued_at="2025-06-02")
+    body = build_document_create(INVOICE, client, ns)
+    assert body["currency_code"] == "ARS"
+    assert body["currency_rate"] == 1175
+
+
+def test_journal_foreign_currency_autofills_rate(monkeypatch):
+    import akt.resources as R
+    monkeypatch.setattr(R.fx, "resolve_rate", lambda *a, **k: Decimal("0.88"))
+    client = FakeClient(settings={"default.currency": "USD"}, journals_list=[])
+    ns = _journal_ns(journal_number="JE-1", currency_code="EUR")
+    body = build_journal_create(JOURNAL_ENTRY, client, ns)
+    assert body["currency_code"] == "EUR"
+    assert body["currency_rate"] == 0.88
 
 
 # --------------------------------------------------------------------------

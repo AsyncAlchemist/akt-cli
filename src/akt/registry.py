@@ -177,6 +177,21 @@ CURRENCY = Resource(
     help="Currencies",
 )
 
+# Foreign-currency rate-input controls, shared by the transaction nouns. All are
+# `local` (CLI-only) — consumed by resources.resolve_currency_rate, never sent in
+# the request body.
+_FX_INPUT_FIELDS = [
+    f("rate-date", "Date (YYYY-MM-DD) to look up the FX rate for "
+                   "(default: the transaction's own date)", local=True),
+    f("ars-casa", "ARS dollar rate type for the FX feed (default bolsa/MEP)",
+      choices=["oficial", "blue", "bolsa", "contadoconliqui", "cripto",
+               "mayorista", "solidario", "turista"], local=True),
+    f("ars-side", "ARS price side from the feed (default mid)",
+      choices=["mid", "venta", "compra"], local=True),
+    f("no-auto-rate", "Do not fetch an FX rate; store currency_rate=1",
+      is_flag=True, local=True),
+]
+
 # Documents -----------------------------------------------------------------
 
 _DOC_FIELDS = [
@@ -190,6 +205,7 @@ _DOC_FIELDS = [
     f("category-id", "Category id"),
     f("order-number", "Order number"),
     f("notes", "Notes"),
+    *_FX_INPUT_FIELDS,
 ]
 
 INVOICE = Resource(
@@ -245,6 +261,7 @@ PAYMENT = Resource(
         f("number", "Transaction number (auto if omitted)"),
         f("reference", "Reference"),
         f("description", "Description"),
+        *_FX_INPUT_FIELDS,
     ],
     columns=_TXN_COLS,
     supports_toggle=False,
@@ -320,6 +337,7 @@ JOURNAL_ENTRY = Resource(
         f("reference", "Reference"),
         f("currency-code", "Currency code", default="USD"),
         f("currency-rate", "Currency rate", default=1),
+        *_FX_INPUT_FIELDS,
     ],
     columns=[
         ("ID", "id"), ("Number", "journal_number"), ("Date", "paid_at"),

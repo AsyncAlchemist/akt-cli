@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -182,3 +183,42 @@ def test_resolve_disabled_raises(monkeypatch, tmp_path):
     with pytest.raises(fx.FxError):
         fx.resolve_rate("USD", "EUR", date(2020, 1, 2), cache_dir=str(tmp_path),
                         get_json=lambda u: {"rates": {"EUR": 0.9}})
+
+
+def test_fx_error_is_valueerror():
+    # so the CLI's top-level `except ValueError` surfaces it as a clean error
+    assert issubclass(fx.FxError, ValueError)
+
+
+# --------------------------------------------------------------------------
+# `akt fx` command handler
+# --------------------------------------------------------------------------
+
+class _FxCliClient:
+    def setting(self, key, default=None):
+        return "USD" if key == "default.currency" else default
+
+    def has_ledger_api(self):
+        return False
+
+
+def test_cli_fx_command_emits_rate_and_inverse(monkeypatch, capsys):
+    from akt import cli
+    monkeypatch.setattr(fx, "resolve_rate", lambda base, code, on, **k: Decimal("0.8"))
+    ns = SimpleNamespace(code="EUR", on="2025-06-02", to=None, amount=None,
+                         ars_casa=None, ars_side=None, json=True)
+    assert cli._run_special("fx", _FxCliClient(), ns) == 0
+    out = capsys.readouterr().out
+    assert '"code": "EUR"' in out
+    assert '"rate": 0.8' in out
+    assert '"inverse": 1.25' in out
+
+
+def test_cli_fx_command_converts_amount_locally(monkeypatch, capsys):
+    from akt import cli
+    monkeypatch.setattr(fx, "resolve_rate", lambda base, code, on, **k: Decimal("1175"))
+    ns = SimpleNamespace(code="ARS", on=None, to=None, amount=1175.0,
+                         ars_casa="bolsa", ars_side="mid", json=True)
+    assert cli._run_special("fx", _FxCliClient(), ns) == 0
+    out = capsys.readouterr().out
+    assert '"amount_base": 1.0' in out  # 1175 ARS / 1175 == 1.00 USD (no module -> local)
