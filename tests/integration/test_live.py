@@ -464,3 +464,39 @@ def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
                           "--description", "coa coded (by account)", "--account", "991")
     tracker("payment", by_account["id"])
     assert str(by_account["category_id"]) == str(cat["id"])
+
+
+# --------------------------------------------------------------------------
+# akt-api banks/unmapped: banks with no Double-Entry ledger mapping (the
+# root cause behind transactions that silently post nothing). akt verify
+# surfaces these. Shape check only — forcing a live unmapped bank isn't
+# practical (creating a bank auto-maps it via DoubleEntry's observer).
+# --------------------------------------------------------------------------
+
+def test_akt_api_banks_unmapped_shape(akt):
+    """The banks/unmapped diagnostic returns a JSON list of {id,name}."""
+    import json
+    probe = akt("raw", "GET", "akt-api/banks/unmapped", raw=True)
+    if probe.returncode != 0 or "404" in probe.stderr:
+        pytest.skip("akt-api banks/unmapped endpoint not deployed")
+    resp = json.loads(probe.stdout)
+    data = resp.get("data", resp) if isinstance(resp, dict) else resp
+    assert isinstance(data, list)
+    for b in data:
+        assert "id" in b and "name" in b
+
+
+def test_verify_runs_without_coa(akt_env):
+    """`akt verify` runs the COA-independent health checks with no COA config."""
+    import json
+    import subprocess
+
+    from conftest import _AKT_CMD
+
+    env = {k: v for k, v in akt_env.items() if k != "AKT_COA_FILE"}
+    proc = subprocess.run([*_AKT_CMD, "--json", "verify"],
+                          capture_output=True, text=True, env=env)
+    if proc.returncode not in (0, 1):
+        raise AssertionError(f"verify errored: {proc.stderr.strip()}")
+    findings = json.loads(proc.stdout) if proc.stdout.strip() else []
+    assert isinstance(findings, list)

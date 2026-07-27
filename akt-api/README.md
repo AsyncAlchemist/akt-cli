@@ -13,6 +13,7 @@ transaction's postings live) has no endpoint. This module adds one:
 GET   /api/akt-api/ledgers            # read GL postings
 PATCH /api/akt-api/ledgers/{id}       # recode: repoint one item leg's GL account
 POST  /api/akt-api/ledgers/{id}/split # split: fan one item leg into N item legs
+GET   /api/akt-api/banks/unmapped     # banks with no Double-Entry ledger mapping
 ```
 
 ## What it does
@@ -25,7 +26,11 @@ POST  /api/akt-api/ledgers/{id}/split # split: fan one item leg into N item legs
   transaction can post to several GL accounts, the way an invoice's line items do).
 - Reads the `double_entry_ledger` table via the query builder only — it does
   **not** import or modify any DoubleEntry code, so it survives DoubleEntry
-  updates. (It couples only to that table's column names.)
+  updates. (It couples only to that table's column names.) The one exception is
+  `GET .../banks/unmapped`, which also reads `double_entry_account_bank` (still
+  query-builder only, no DoubleEntry code) to find banks with no ledger mapping —
+  the root cause of a transaction that silently posts nothing; `akt verify`
+  surfaces these.
 - Inherits Akaunting's core `api` middleware for auth: **HTTP Basic** (the same
   admin email/password every other `/api/...` call uses) + `permission:read-api`
   + company scoping. No separate key or token.

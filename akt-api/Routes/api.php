@@ -31,5 +31,8 @@ Route::group([
         // transaction, the way an invoice's line items post). The total (bank) leg
         // is untouched; the new legs must net to the original so the entry balances.
         Route::post('akt-api/ledgers/{id}/split', 'Ledgers@split')->name('akt-api.ledgers.split');
+        // Banks with no DoubleEntry ledger mapping — an unmapped bank silently
+        // posts nothing (powers `akt verify`). Read-only diagnostic.
+        Route::get('akt-api/banks/unmapped', 'Banks@unmapped')->name('akt-api.banks.unmapped');
     });
 });

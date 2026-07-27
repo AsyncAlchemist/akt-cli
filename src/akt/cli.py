@@ -23,7 +23,7 @@ from .registry import RESOURCES, BY_NOUN
 from .resources import Resource, load_data_arg
 from .coa import load_coa, plan_sync, render_plan, apply_plan
 from .ledger import resolve_account_id
-from .verify import find_miscodings, find_report_dropped, build_recode_plan
+from .verify import find_miscodings, find_report_dropped, find_unposted, build_recode_plan
 from . import reports
 
 
@@ -332,8 +332,6 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
         return 0
     if name == "verify":
         coa = ns._coa
-        if coa is None:
-            raise ValueError("`akt verify` needs a COA config (use --coa FILE or set AKT_COA_FILE)")
         if not client.has_ledger_api():
             raise ValueError("`akt verify` needs the akt-api companion module — "
                              "install it into your Akaunting modules/ directory (see akt-api/README.md)")
@@ -345,26 +343,42 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
         if ns.date_to:
             txns = [t for t in txns if str(t.get("paid_at", ""))[:10] <= ns.date_to]
 
-        categories_by_id = {c["id"]: {"name": c.get("name"), "type": c.get("type")}
-                            for c in client.list("categories", all_pages=True)}
         accounts = client.list("chart-of-accounts", all_pages=True)
         accounts_by_id = {a["id"]: {"code": a.get("code"), "name": a.get("name"),
                                     "type_id": a.get("type_id")} for a in accounts}
-        accounts_by_code = {int(a["code"]): a["id"] for a in accounts if a.get("code") is not None}
-
         item_ledgers = client.list("akt-api/ledgers", all_pages=True, params={
             "ledgerable_type": "App\\Models\\Banking\\Transaction", "entry_type": "item"})
         item_account_by_txn = {int(l["ledgerable_id"]): int(l["account_id"]) for l in item_ledgers}
+        banks_by_id = {b["id"]: {"name": b.get("name")}
+                       for b in client.list("accounts", all_pages=True)}
 
-        findings = find_miscodings(txns, categories_by_id, accounts_by_id,
-                                   accounts_by_code, item_account_by_txn, coa)
-        # Also flag postings the COA report silently drops (txn type vs account
-        # class mismatch — e.g. a refund booked as income onto an expense account).
-        findings += find_report_dropped(txns, item_account_by_txn, accounts_by_id)
-        cols = ["transaction_id", "paid_at", "amount", "category",
+        # COA-independent ledger-health checks (always run).
+        findings = find_unposted(txns, item_account_by_txn, banks_by_id)
+        rep = client.get("akt-api/banks/unmapped")
+        for b in (rep.get("data", rep) if isinstance(rep, dict) else rep):
+            findings.append({
+                "transaction_id": None, "paid_at": None, "amount": None,
+                "bank": b.get("name"), "category": None,
+                "expected_code": None, "actual_code": None,
+                "reason": "bank has no Double-Entry ledger mapping — run "
+                          "DoubleEntry's CopyData install job",
+            })
+
+        # COA-dependent coding checks (only when a COA config is present).
+        if coa is not None:
+            categories_by_id = {c["id"]: {"name": c.get("name"), "type": c.get("type")}
+                                for c in client.list("categories", all_pages=True)}
+            accounts_by_code = {int(a["code"]): a["id"] for a in accounts if a.get("code") is not None}
+            findings += find_miscodings(txns, categories_by_id, accounts_by_id,
+                                        accounts_by_code, item_account_by_txn, coa)
+            findings += find_report_dropped(txns, item_account_by_txn, accounts_by_id)
+
+        for f in findings:
+            f.setdefault("bank", None)
+        cols = ["transaction_id", "paid_at", "amount", "bank", "category",
                 "expected_code", "actual_code", "reason"]
         emit(findings, as_json=ns.json, columns=None if ns.json else cols,
-             headers=["Txn", "Date", "Amount", "Category", "Expected", "Actual", "Reason"])
+             headers=["Txn", "Date", "Amount", "Bank", "Category", "Expected", "Actual", "Reason"])
         return 0 if not findings else 1
     if name == "recode":
         coa = ns._coa
