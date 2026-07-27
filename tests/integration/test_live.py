@@ -464,3 +464,23 @@ def test_coa_sync_and_coded_payment(akt, tracker, akt_env, tmp_path):
                           "--description", "coa coded (by account)", "--account", "991")
     tracker("payment", by_account["id"])
     assert str(by_account["category_id"]) == str(cat["id"])
+
+
+# --------------------------------------------------------------------------
+# akt-api banks/unmapped: banks with no Double-Entry ledger mapping (the
+# root cause behind transactions that silently post nothing). akt verify
+# surfaces these. Shape check only — forcing a live unmapped bank isn't
+# practical (creating a bank auto-maps it via DoubleEntry's observer).
+# --------------------------------------------------------------------------
+
+def test_akt_api_banks_unmapped_shape(akt):
+    """The banks/unmapped diagnostic returns a JSON list of {id,name}."""
+    import json
+    probe = akt("raw", "GET", "akt-api/banks/unmapped", raw=True)
+    if probe.returncode != 0 or "404" in probe.stderr:
+        pytest.skip("akt-api banks/unmapped endpoint not deployed")
+    resp = json.loads(probe.stdout)
+    data = resp.get("data", resp) if isinstance(resp, dict) else resp
+    assert isinstance(data, list)
+    for b in data:
+        assert "id" in b and "name" in b
