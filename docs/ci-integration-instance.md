@@ -55,6 +55,8 @@ create/delete churn are harmless.
      \App\Models\Common\Company::find(1)->makeCurrent();
      dispatch_sync(new \Modules\DoubleEntry\Jobs\Install\CopyData());'
    ```
+   `akt verify` now flags this (unmapped banks + transactions that posted no
+   ledger legs), so you can run it to confirm the mapping took.
 7. **akt-api**: `scripts/deploy-akt-api.sh` rsyncs + enables it — or copy it to
    `modules/AktApi`, upsert its `modules` row, and clear caches.
 8. **Skip the setup wizard** (it 302-redirects every route until done):

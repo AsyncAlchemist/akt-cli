@@ -484,3 +484,19 @@ def test_akt_api_banks_unmapped_shape(akt):
     assert isinstance(data, list)
     for b in data:
         assert "id" in b and "name" in b
+
+
+def test_verify_runs_without_coa(akt_env):
+    """`akt verify` runs the COA-independent health checks with no COA config."""
+    import json
+    import subprocess
+
+    from conftest import _AKT_CMD
+
+    env = {k: v for k, v in akt_env.items() if k != "AKT_COA_FILE"}
+    proc = subprocess.run([*_AKT_CMD, "--json", "verify"],
+                          capture_output=True, text=True, env=env)
+    if proc.returncode not in (0, 1):
+        raise AssertionError(f"verify errored: {proc.stderr.strip()}")
+    findings = json.loads(proc.stdout) if proc.stdout.strip() else []
+    assert isinstance(findings, list)
