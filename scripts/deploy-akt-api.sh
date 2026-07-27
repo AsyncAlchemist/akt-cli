@@ -21,6 +21,9 @@ SSH_HOST="${AKT_API_SSH_HOST:?set AKT_API_SSH_HOST to your ssh host/alias}"
 APP_URL="${AKT_API_APP_URL:?set AKT_API_APP_URL to your Akaunting base URL}"
 REMOTE="${AKT_API_REMOTE:-akaunting}"
 COMPANY="${AKT_API_COMPANY:-1}"
+# Remote PHP CLI. Override when the account default is too old — cPanel ships 7.4
+# as `php` but Akaunting 3.x needs 8.1 (e.g. /opt/cpanel/ea-php81/root/usr/bin/php).
+PHP="${AKT_API_PHP:-php}"
 ALIAS="akt-api"      # module.json alias (== the /api/<alias>/ URL prefix; Str::studly -> AktApi)
 MODDIR="AktApi"      # install directory (StudlyCase, matches Str::studly(alias) + the namespace)
 ENDPOINT="api/akt-api/ledgers"
@@ -35,10 +38,10 @@ remote() { ssh "$SSH_HOST" "cd $REMOTE && $*"; }
 rollback() {
     log "rolling back — removing the modules row + files, clearing caches"
     ssh "$SSH_HOST" "cd $REMOTE && \
-        php artisan tinker --execute=\"DB::table('modules')->where('alias','$ALIAS')->delete();\" >/dev/null 2>&1 || true; \
+        $PHP artisan tinker --execute=\"DB::table('modules')->where('alias','$ALIAS')->delete();\" >/dev/null 2>&1 || true; \
         rm -rf modules/$MODDIR; \
-        php artisan cache:clear >/dev/null 2>&1 || true; \
-        php artisan route:clear >/dev/null 2>&1 || true" || true
+        $PHP artisan cache:clear >/dev/null 2>&1 || true; \
+        $PHP artisan route:clear >/dev/null 2>&1 || true" || true
 }
 
 [ -d "$MODULE_SRC" ] || { fail "module source not found: $MODULE_SRC"; exit 2; }
@@ -48,10 +51,10 @@ rsync -az --delete "$MODULE_SRC"/ "$SSH_HOST:$REMOTE/modules/$MODDIR/"
 
 # Enable = an upsert into the `modules` table (exactly what Akaunting's
 # ModuleActivator::setActive does). We write the row directly instead of using
-# `php artisan module:enable`, whose module-name resolution is unreliable for a
+# `$PHP artisan module:enable`, whose module-name resolution is unreliable for a
 # hand-placed (non-marketplace) module. Idempotent: re-running just re-sets it.
 log "enable '$ALIAS' for company $COMPANY (upsert the modules row)"
-if ! remote "php artisan tinker --execute=\"DB::table('modules')->updateOrInsert(['company_id'=>$COMPANY,'alias'=>'$ALIAS','deleted_at'=>null],['enabled'=>1,'created_at'=>now(),'updated_at'=>now()]);\""; then
+if ! remote "$PHP artisan tinker --execute=\"DB::table('modules')->updateOrInsert(['company_id'=>$COMPANY,'alias'=>'$ALIAS','deleted_at'=>null],['enabled'=>1,'created_at'=>now(),'updated_at'=>now()]);\""; then
     fail "enable (modules row upsert) failed"
     rollback
     exit 1
@@ -59,10 +62,10 @@ fi
 
 # Clear caches AFTER — refreshes the module status + route registration.
 log "clear caches so the module status + routes refresh"
-remote "php artisan cache:clear && php artisan config:clear && php artisan route:clear" >/dev/null
+remote "$PHP artisan cache:clear && $PHP artisan config:clear && $PHP artisan route:clear" >/dev/null
 
 log "verify the route is registered"
-if ! remote "php artisan route:list 2>/dev/null" | grep -q "$ENDPOINT"; then
+if ! remote "$PHP artisan route:list 2>/dev/null" | grep -q "$ENDPOINT"; then
     fail "route '$ENDPOINT' is not registered after enable"
     rollback
     exit 1
