@@ -93,6 +93,23 @@ def test_argentina_latest_uses_dolarapi_casa():
     assert "dolares/blue" in seen["url"]
 
 
+def test_argentina_mid_handles_one_sided_casa():
+    # compra missing -> use venta (some casas quote a single side); no crash, no halving
+    assert fx.ArgentinaProvider(get_json=lambda u: {"compra": None, "venta": 1350}).usd_per(
+        "ARS", date(2025, 6, 2)) == Decimal("1350")
+    # compra 0 is treated as absent, not averaged in as a real 0
+    assert fx.ArgentinaProvider(get_json=lambda u: {"compra": 0, "venta": 1350}).usd_per(
+        "ARS", date(2025, 6, 2)) == Decimal("1350")
+
+
+def test_argentina_list_multi_no_match_returns_none():
+    # a multi-row list with no casa match must NOT guess (would return oficial for CCL)
+    resp = [{"casa": "oficial", "compra": 900, "venta": 950},
+            {"casa": "blue", "compra": 1100, "venta": 1150}]
+    assert fx.ArgentinaProvider(casa="contadoconliqui", get_json=lambda u: resp).usd_per(
+        "ARS", date(2025, 6, 2)) is None
+
+
 def test_argentina_non_ars_returns_none_without_call():
     called = []
 
@@ -170,6 +187,32 @@ def test_resolve_latest_not_cached(tmp_path):
     fx.resolve_rate("USD", "EUR", None, cache_dir=str(tmp_path), get_json=get)
     fx.resolve_rate("USD", "EUR", None, cache_dir=str(tmp_path), get_json=get)
     assert len(calls) == 2  # today's/latest rate is volatile — never cached
+
+
+def test_resolve_today_uses_latest_endpoint(tmp_path):
+    # a same-day transaction must hit the "latest" feed, not the by-date endpoint
+    # (ArgentinaDatos has no row for today yet -> would otherwise hard-fail).
+    seen = {}
+
+    def get(url):
+        seen["url"] = url
+        return {"compra": 1150, "venta": 1200}
+
+    today = date(2025, 1, 15)
+    fx.resolve_rate("USD", "ARS", today, cache_dir=str(tmp_path), get_json=get, today=today)
+    assert "dolares/bolsa" in seen["url"] and "cotizaciones" not in seen["url"]
+
+
+def test_resolve_future_date_uses_latest(tmp_path):
+    seen = {}
+
+    def get(url):
+        seen["url"] = url
+        return {"rates": {"EUR": 0.9}}
+
+    fx.resolve_rate("USD", "EUR", date(2025, 1, 2), cache_dir=str(tmp_path),
+                    get_json=get, today=date(2025, 1, 1))
+    assert "latest" in seen["url"]
 
 
 def test_resolve_hard_fails_on_unsupported(tmp_path):

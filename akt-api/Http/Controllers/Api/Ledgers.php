@@ -83,86 +83,102 @@ class Ledgers extends ApiController
      */
     public function index(Request $request)
     {
-        $query = DB::table('double_entry_ledger')
-            ->where('company_id', company_id());
+        // Opt-in (?convert=1): show each leg AS POSTED (its own currency) plus
+        // base-currency columns. Convert through DoubleEntry's own DefaultCurrency
+        // cast — the exact per-leg mechanism Account::calculateBalance uses — so
+        // invoice/bill/tax/transfer legs, whose rate lives on a parent record
+        // rather than the leg itself, convert correctly (a flat table lookup can't).
+        if ($request->boolean('convert')) {
+            return $this->indexConverted($request);
+        }
 
+        $query = $this->applyLedgerFilters(
+            DB::table('double_entry_ledger')->where('company_id', company_id()), $request);
+
+        $rows = $query->orderBy('issued_at')->orderBy('id')
+            ->paginate((int) $request->input('limit', 100));
+
+        return Resource::collection($rows);
+    }
+
+    /** Apply the shared account_id/ledgerable/type/date filters to a builder. */
+    private function applyLedgerFilters($query, Request $request)
+    {
         foreach (['account_id', 'ledgerable_id'] as $intField) {
             if ($request->filled($intField)) {
                 $query->where($intField, (int) $request->input($intField));
             }
         }
-
         foreach (['ledgerable_type', 'entry_type'] as $strField) {
             if ($request->filled($strField)) {
                 $query->where($strField, $request->input($strField));
             }
         }
-
         if ($request->filled('issued_from')) {
             $query->where('issued_at', '>=', $request->input('issued_from'));
         }
-
         if ($request->filled('issued_to')) {
             $query->where('issued_at', '<=', $request->input('issued_to'));
         }
+        return $query;
+    }
+
+    /**
+     * ?convert=1 path: hydrate via the Eloquent Ledger model + `with('ledgerable')`
+     * and apply castDebit()/castCredit() (the DefaultCurrency cast) for the base
+     * amounts — correct for every leg type, including document/tax legs whose rate
+     * is on the parent document. Raw debit/credit stay as posted.
+     */
+    private function indexConverted(Request $request)
+    {
+        $query = $this->applyLedgerFilters(
+            DeLedger::where('company_id', company_id())->with('ledgerable'), $request);
 
         $rows = $query->orderBy('issued_at')->orderBy('id')
             ->paginate((int) $request->input('limit', 100));
 
-        // Opt-in (?convert=1): annotate each row with its source currency and the
-        // base-currency amount (base = amount / currency_rate, Akaunting's
-        // convertToDefault, applied to each ledgerable's stored historical rate).
-        // Lets `akt ledger` show foreign amounts AS POSTED plus an unambiguous
-        // converted column, rather than General Ledger's silently-mislabelled sum.
-        if ($request->boolean('convert')) {
-            $this->attachConverted($rows->getCollection());
-        }
+        $rows->getCollection()->transform(function ($l) {
+            $rawDebit  = $l->getRawOriginal('debit');
+            $rawCredit = $l->getRawOriginal('credit');
+            $currency  = $this->legCurrency($l->ledgerable);
+            $l->castDebit();   // merge the DefaultCurrency cast -> converts on read
+            $l->castCredit();
+            return (object) [
+                'id'               => $l->id,
+                'company_id'       => $l->company_id,
+                'account_id'       => $l->account_id,
+                'ledgerable_type'  => $l->ledgerable_type,
+                'ledgerable_id'    => $l->ledgerable_id,
+                'entry_type'       => $l->entry_type,
+                'issued_at'        => $l->issued_at,
+                'debit'            => $rawDebit,
+                'credit'           => $rawCredit,
+                'currency_code'    => $currency,
+                'debit_converted'  => $rawDebit  === null ? null : round((float) $l->debit, 4),
+                'credit_converted' => $rawCredit === null ? null : round((float) $l->credit, 4),
+            ];
+        });
 
         return Resource::collection($rows);
     }
 
     /**
-     * Batch-annotate ledger rows with `currency_code` + converted debit/credit,
-     * pulling each ledgerable's currency from its own table (grouped by morph type
-     * so it stays O(types), not O(rows)). Unknown types fall back to the default
-     * currency at rate 1 — harmless, since those legs are already base-currency.
+     * Best-effort source currency of a leg: the transaction/journal's own currency,
+     * or a document line's parent-document currency; falls back to the default.
+     * (Display label only — the converted amounts above come from the cast.)
      */
-    private function attachConverted($items): void
+    private function legCurrency($ledgerable): string
     {
-        $tableFor = [
-            'App\\Models\\Banking\\Transaction'     => 'transactions',
-            'App\\Models\\Document\\Document'        => 'documents',
-            'Modules\\DoubleEntry\\Models\\Journal'  => 'double_entry_journals',
-        ];
-
-        $byType = [];
-        foreach ($items as $r) {
-            $byType[$r->ledgerable_type][] = (int) $r->ledgerable_id;
+        if (! $ledgerable) {
+            return default_currency();
         }
-
-        $info = [];  // "type#id" => [code, rate]
-        foreach ($byType as $type => $ids) {
-            $table = $tableFor[$type] ?? null;
-            if (! $table) {
-                continue;
-            }
-            $recs = DB::table($table)->whereIn('id', array_values(array_unique($ids)))
-                ->get(['id', 'currency_code', 'currency_rate']);
-            foreach ($recs as $rec) {
-                $info[$type . '#' . $rec->id] = [
-                    $rec->currency_code ?: default_currency(),
-                    ((float) $rec->currency_rate) ?: 1.0,
-                ];
-            }
+        if (! empty($ledgerable->currency_code)) {
+            return $ledgerable->currency_code;
         }
-
-        foreach ($items as $r) {
-            [$code, $rate] = $info[$r->ledgerable_type . '#' . $r->ledgerable_id]
-                ?? [default_currency(), 1.0];
-            $r->currency_code    = $code;
-            $r->debit_converted  = $r->debit  === null ? null : round(((float) $r->debit) / $rate, 4);
-            $r->credit_converted = $r->credit === null ? null : round(((float) $r->credit) / $rate, 4);
+        if (! empty($ledgerable->document) && ! empty($ledgerable->document->currency_code)) {
+            return $ledgerable->document->currency_code;
         }
+        return default_currency();
     }
 
     /**

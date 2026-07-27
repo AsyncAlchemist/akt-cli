@@ -358,6 +358,28 @@ def test_invoice_foreign_currency_autofills_rate(monkeypatch):
     assert body["currency_rate"] == 1175
 
 
+def test_payment_invalid_rate_date_errors(monkeypatch):
+    import akt.resources as R
+    monkeypatch.setattr(R.fx, "resolve_rate", lambda *a, **k: Decimal("0.9"))
+    client = FakeClient(settings={"default.income_category": "2", "default.account": "1",
+                                  "default.currency": "USD"})
+    ns = _payment_ns(type="income", amount=100, currency_code="EUR", rate_date="2025-13-40")
+    with pytest.raises(ValueError, match="rate-date"):
+        build_payment_create(PAYMENT, client, ns)
+
+
+def test_payment_defaults_currency_to_company_default(monkeypatch):
+    # Non-USD-default company: a no-currency txn is the default currency at rate 1,
+    # with NO FX fetch (was previously hardcoded to USD -> would fetch USD->ARS).
+    import akt.resources as R
+    monkeypatch.setattr(R.fx, "resolve_rate", _no_fetch)
+    client = FakeClient(settings={"default.income_category": "2", "default.account": "1",
+                                  "default.currency": "ARS"})
+    body = build_payment_create(PAYMENT, client, _payment_ns(type="income", amount=100))
+    assert body["currency_code"] == "ARS"
+    assert body["currency_rate"] == 1.0
+
+
 def test_journal_foreign_currency_autofills_rate(monkeypatch):
     import akt.resources as R
     monkeypatch.setattr(R.fx, "resolve_rate", lambda *a, **k: Decimal("0.88"))

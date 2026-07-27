@@ -36,11 +36,14 @@ class Balances extends ApiController
      */
     public function index(Request $request)
     {
+        // Mirror Account::calculateBalance exactly. The `accrual` (default basis)
+        // scope both (a) excludes orphaned/soft-deleted ledgerables and (b) applies
+        // Akaunting's draft/cancelled-document filtering — the same scope
+        // calculateBalance uses (`->{$this->basis}()`). We then convert each leg to
+        // the default currency via the DefaultCurrency cast.
         $query = Ledger::where('company_id', company_id())
-            ->whereHasMorph('ledgerable', '*')  // drop orphans (soft-deleted/missing targets)
-            ->with('ledgerable')                // the DefaultCurrency cast reads ledgerable->currency_rate
-            ->select('id', 'company_id', 'account_id', 'ledgerable_type',
-                     'ledgerable_id', 'debit', 'credit', 'issued_at');
+            ->accrual()
+            ->with('ledgerable');               // the DefaultCurrency cast reads ledgerable->currency_rate
 
         if ($request->filled('date_from')) {
             $query->whereDate('issued_at', '>=', $request->input('date_from'));
@@ -49,8 +52,10 @@ class Balances extends ApiController
             $query->whereDate('issued_at', '<=', $request->input('date_to'));
         }
 
+        // chunkById (keyset, ordered by id) — a plain chunk() has no stable order,
+        // so LIMIT/OFFSET could skip or double-count rows past the first 1000.
         $totals = [];
-        $query->chunk(1000, function ($ledgers) use (&$totals) {
+        $query->chunkById(1000, function ($ledgers) use (&$totals) {
             foreach ($ledgers as $ledger) {
                 $ledger->castDebit();   // merge the DefaultCurrency cast -> converts on read
                 $ledger->castCredit();

@@ -104,17 +104,25 @@ class ArgentinaProvider:
             url = f"{self.historical_url}/cotizaciones/dolares/{self.casa}/{on.strftime('%Y/%m/%d')}"
         payload = self.get_json(url)
         if isinstance(payload, list):  # a couple of these endpoints wrap the row in a list
-            payload = next((r for r in payload
-                            if str(r.get("casa", self.casa)) == self.casa), payload[0] if payload else {})
+            match = next((r for r in payload if str(r.get("casa", "")) == self.casa), None)
+            # fall back to the sole row only if unambiguous; never guess a casa from
+            # a multi-row list (that would silently return e.g. oficial for CCL).
+            payload = match if match is not None else (payload[0] if len(payload) == 1 else {})
         payload = payload or {}
         compra, venta = payload.get("compra"), payload.get("venta")
-        if compra is None and venta is None:
-            return None
         if self.side == "venta":
-            return _dec(venta if venta is not None else compra)
+            picked = venta if venta is not None else compra
+            return _dec(picked) if picked is not None else None
         if self.side == "compra":
-            return _dec(compra if compra is not None else venta)
-        return (_dec(compra) + _dec(venta)) / 2  # mid
+            picked = compra if compra is not None else venta
+            return _dec(picked) if picked is not None else None
+        # mid: average both sides only when both are present and non-zero; some
+        # casas (turista/solidario/mayorista) quote a single side — use whichever
+        # exists rather than averaging in a null/zero (which would crash or halve it).
+        sides = [_dec(x) for x in (compra, venta) if x not in (None, 0, "0")]
+        if not sides:
+            return None
+        return sum(sides) / len(sides)
 
 
 def _provider_for(code: str, ars_casa: str, ars_side: str,
@@ -155,6 +163,11 @@ def resolve_rate(default_code: str, foreign_code: str, on: date | None, *,
 
     today = today or date.today()
     is_historical = on is not None and on < today
+    # Only a strictly-past date uses the by-date (historical) endpoint. Today or a
+    # future date resolves via the "latest" endpoint — the by-date feed often has
+    # no row for today yet (ArgentinaDatos publishes next day), which would
+    # otherwise hard-fail a same-day foreign transaction.
+    query_on = on if is_historical else None
 
     if is_historical and cache_dir:
         cp = _cache_path(cache_dir, default_code, foreign_code, on, ars_casa, ars_side)
@@ -168,7 +181,7 @@ def resolve_rate(default_code: str, foreign_code: str, on: date | None, *,
         if code == "USD":
             return Decimal(1)
         prov = _provider_for(code, ars_casa, ars_side, get_json)
-        rate = prov.usd_per(code, on)
+        rate = prov.usd_per(code, query_on)
         if rate is None or rate == 0:
             feed = "ArgentinaDatos/dolarapi" if code == "ARS" else "Frankfurter (ECB)"
             raise FxError(

@@ -231,7 +231,14 @@ def resolve_currency_rate(client: Client, ns: Any, *, currency_code: str | None,
         return 1.0
     if getattr(ns, "no_auto_rate", False):
         return 1.0
-    on = _date_opt(getattr(ns, "rate_date", None) or on_date)
+    rate_date = getattr(ns, "rate_date", None)
+    if rate_date:
+        try:
+            on = _dt.date.fromisoformat(str(rate_date)[:10])
+        except ValueError:
+            raise ValueError(f"invalid --rate-date {rate_date!r}; use YYYY-MM-DD")
+    else:
+        on = _date_opt(on_date)
     rate = fx.resolve_rate(
         default, currency_code, on,
         ars_casa=getattr(ns, "ars_casa", None) or "bolsa",
@@ -347,7 +354,8 @@ def build_document_create(res: Resource, client: Client, ns: Any) -> dict:
         raise ValueError(f"--contact <id> is required to create a {res.noun}")
 
     contact = client.show("contacts", contact_id, type_scope=res.contact_scope())
-    currency = getattr(ns, "currency_code", None) or contact.get("currency_code") or "USD"
+    currency = (getattr(ns, "currency_code", None) or contact.get("currency_code")
+                or client.setting("default.currency", "USD"))
 
     items_specs = getattr(ns, "item", None) or []
     items = [parse_item(s) for s in items_specs]
@@ -616,7 +624,7 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
     currency = getattr(ns, "currency_code", None)
     if currency is None and document is not None:
         currency = document.get("currency_code")
-    currency = currency or "USD"
+    currency = currency or client.setting("default.currency", "USD")
 
     number = getattr(ns, "number", None) or _next_transaction_number(client)
     paid = _normalize_date(getattr(ns, "paid_at", None) or now_dt())
@@ -810,7 +818,7 @@ def build_journal_create(res: Resource, client: Client, ns: Any) -> dict:
         raise ValueError("--description is required to create a journal-entry")
 
     paid = _normalize_date(getattr(ns, "paid_at", None) or today_dt())
-    currency = getattr(ns, "currency_code", None) or "USD"
+    currency = getattr(ns, "currency_code", None) or client.setting("default.currency", "USD")
     body: dict[str, Any] = {
         "paid_at": paid,
         "journal_number": getattr(ns, "journal_number", None),

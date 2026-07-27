@@ -556,7 +556,12 @@ def _run_special(name: str, client: Client, ns: Any) -> int:
             out["amount_base"] = _convert_amount(client, ns.amount, code, float(rate))
             cols += ["amount", "amount_base"]
             heads += ["Amount", f"In {base}"]
-        emit(out, as_json=ns.json, columns=None if ns.json else cols, headers=heads)
+        # Wrap in a list so the built columns/headers apply — emit renders a bare
+        # dict as a generic field/value dump, ignoring columns.
+        if ns.json:
+            emit(out, as_json=True)
+        else:
+            emit([out], as_json=False, columns=cols, headers=heads)
         return 0
     if name == "gc_ledger":
         _need_akt_api(client, "gc-ledger")
