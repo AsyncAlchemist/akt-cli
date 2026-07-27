@@ -341,6 +341,10 @@ akt payment create ... --currency-code EUR --no-auto-rate          # store 1 (le
 akt payment create ... --currency-code EUR --rate-date 2025-06-30   # a different rate date
 ```
 
+The currency must first exist in Akaunting (it rejects a transaction in an
+unconfigured currency): add it once with `akt currency create --name Euro --code
+EUR --rate 0.9` (any rate — each transaction stores its own).
+
 If a rate can't be resolved (offline, feed down, an unsupported currency, or a
 future date) akt **fails loudly** rather than booking at `1` — pass
 `--currency-rate` to set it manually. Historical rates are cached under

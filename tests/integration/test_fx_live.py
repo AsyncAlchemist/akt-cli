@@ -21,6 +21,15 @@ def _unwrap(payload):
     return payload["data"] if isinstance(payload, dict) and "data" in payload else payload
 
 
+def _ensure_currency(akt, code, name, rate):
+    """Make sure `code` exists on the instance (Akaunting 422s a transaction in an
+    unconfigured currency). Idempotent; left in place (harmless on the disposable
+    instance) so teardown never has to delete a currency a transaction referenced."""
+    rows = _unwrap(akt("currency", "list", "--all"))
+    if not any(str(c.get("code")) == code for c in rows):
+        akt("currency", "create", "--name", name, "--code", code, "--rate", str(rate))
+
+
 def test_fx_eur_live(akt):
     out = akt("fx", "EUR", "--to", "USD")
     assert out["code"] == "EUR" and out["base"] == "USD"
@@ -38,6 +47,7 @@ def test_balances_convert_foreign_leg(akt, tracker):
     if not _has_updated_akt_api(akt):
         pytest.skip("instance runs an older akt-api without base-currency conversion")
 
+    _ensure_currency(akt, "EUR", "Euro", 0.9)
     # A EUR expense at an explicit rate of 0.5 => base = 100 / 0.5 = 200 (default
     # currency). Explicit --currency-rate keeps this deterministic (no feed call).
     created = _unwrap(akt("payment", "create", "--type", "expense", "--amount", "100",
