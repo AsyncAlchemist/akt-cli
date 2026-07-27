@@ -43,13 +43,16 @@ it. These paths deliberately reuse DoubleEntry's models/casts and Akaunting's
   (`PATCH .../ledgers/{id}`, repoint one item leg's GL account) and **split**
   (`POST .../ledgers/{id}/split`, fan one item leg out into N item legs so a bank
   transaction can post to several GL accounts, the way an invoice's line items do).
-- Reads the `double_entry_ledger` table via the query builder only — it does
-  **not** import or modify any DoubleEntry code, so it survives DoubleEntry
-  updates. (It couples only to that table's column names.) The one exception is
-  `GET .../banks/unmapped`, which also reads `double_entry_account_bank` (still
-  query-builder only, no DoubleEntry code) to find banks with no ledger mapping —
-  the root cause of a transaction that silently posts nothing; `akt verify`
-  surfaces these.
+- The ledger read/write and `banks/unmapped` paths touch DoubleEntry's tables
+  via the query builder only (coupling to column names, not code), so they survive
+  DoubleEntry updates. The **base-currency reporting** paths
+  (`balances` / `account-types` / `ledgers?convert=1`) deliberately go the other
+  way: they reuse DoubleEntry's own `Ledger` model + `DefaultCurrency` cast and
+  Akaunting's core `Currencies` trait, so their numbers **mirror Akaunting's own
+  statements exactly** rather than reimplementing conversion. `banks/unmapped`
+  reads `double_entry_account_bank` to find banks with no ledger mapping — the
+  root cause of a transaction that silently posts nothing; `akt verify` surfaces
+  these.
 - Inherits Akaunting's core `api` middleware for auth: **HTTP Basic** (the same
   admin email/password every other `/api/...` call uses) + `permission:read-api`
   + company scoping. No separate key or token.
