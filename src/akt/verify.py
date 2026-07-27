@@ -111,3 +111,32 @@ def build_recode_plan(item_ledgers: list[dict], category_by_txn: dict[int, int],
             "category": cat["name"],
         })
     return plan
+
+
+def find_unposted(transactions: list[dict], item_account_by_txn: dict[int, int],
+                  banks_by_id: dict[int, dict]) -> list[dict]:
+    """Flag standalone income/expense transactions that posted no item leg.
+
+    DoubleEntry's Transaction observer posts a transaction's ledger legs only if
+    its bank has a ``double_entry_account_bank`` mapping; a payment on an unmapped
+    bank silently posts nothing. A transaction whose id is absent from
+    ``item_account_by_txn`` (txn id -> posted item-leg GL account) has no item leg.
+    Pure — all lookups pre-fetched."""
+    findings: list[dict] = []
+    for t in transactions:
+        if t["id"] in item_account_by_txn:
+            continue                                   # posted an item leg — fine
+        bank = banks_by_id.get(t.get("account_id"))
+        bank_label = bank["name"] if bank else t.get("account_id")
+        findings.append({
+            "transaction_id": t["id"],
+            "paid_at": str(t.get("paid_at", ""))[:10],
+            "amount": t.get("amount"),
+            "bank": bank["name"] if bank else None,
+            "category": None,
+            "expected_code": None,
+            "actual_code": None,
+            "reason": f"posted no ledger legs — bank '{bank_label}' is likely "
+                      "unmapped; run DoubleEntry's CopyData install job",
+        })
+    return findings

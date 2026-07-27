@@ -102,3 +102,35 @@ def test_find_report_dropped_ignores_non_pnl_and_matches():
     txns = [{"id": 1, "type": "expense", "paid_at": "2025-06-01", "amount": 10.0},   # ok
             {"id": 2, "type": "income", "paid_at": "2025-06-01", "amount": 10.0}]    # asset acct -> ignore
     assert find_report_dropped(txns, {1: 91, 2: 10}, accounts) == []
+
+
+# --- find_unposted: transactions that posted no ledger legs (silent banks) ---
+from akt.verify import find_unposted  # noqa: E402
+
+_BANKS = {1: {"name": "Cash"}, 2: {"name": "Checking"}}
+
+
+def _paytxn(tid, account_id, amount=10.0):
+    return {"id": tid, "paid_at": "2025-06-01", "amount": amount, "account_id": account_id}
+
+
+def test_unposted_flags_txn_with_no_item_leg():
+    txns = [_paytxn(1, account_id=1)]
+    out = find_unposted(txns, item_account_by_txn={}, banks_by_id=_BANKS)
+    assert len(out) == 1
+    assert out[0]["transaction_id"] == 1
+    assert out[0]["bank"] == "Cash"
+    assert "unmapped" in out[0]["reason"]
+
+
+def test_unposted_skips_txn_that_posted():
+    txns = [_paytxn(1, account_id=1)]
+    assert find_unposted(txns, item_account_by_txn={1: 90}, banks_by_id=_BANKS) == []
+
+
+def test_unposted_falls_back_to_account_id_when_bank_unknown():
+    txns = [_paytxn(1, account_id=99)]
+    out = find_unposted(txns, item_account_by_txn={}, banks_by_id=_BANKS)
+    assert len(out) == 1
+    assert out[0]["bank"] is None
+    assert "99" in out[0]["reason"]
