@@ -10,11 +10,30 @@ Akaunting's DoubleEntry app publishes only `journal-entry` and
 transaction's postings live) has no endpoint. This module adds one:
 
 ```
-GET   /api/akt-api/ledgers            # read GL postings
+GET   /api/akt-api/ledgers            # read GL postings (?convert=1 adds currency + base amounts)
 PATCH /api/akt-api/ledgers/{id}       # recode: repoint one item leg's GL account
 POST  /api/akt-api/ledgers/{id}/split # split: fan one item leg into N item legs
+GET   /api/akt-api/balances           # per-account debit/credit totals, in base currency
+GET   /api/akt-api/account-types      # account type -> class map (Assets/Income/…)
+GET   /api/akt-api/convert            # amount + rate -> base currency (convertToDefault)
 GET   /api/akt-api/banks/unmapped     # banks with no Double-Entry ledger mapping
 ```
+
+### Base-currency conversion (multi-currency)
+
+`GET .../balances` returns each account's debit/credit **converted to the company
+default currency**. The `double_entry_ledger` table stores each leg in its source
+record's own currency; this endpoint converts every leg with DoubleEntry's own
+`Ledger::castDebit()/castCredit()` (the `DefaultCurrency` cast, driven by each
+ledgerable's historical `currency_rate`) — the exact code path
+`Account::calculateBalance()` uses. So `akt trial-balance` / `report` / `balance`
+match Akaunting's own statements instead of summing foreign face values.
+
+`GET .../convert` (`amount`, `currency_code`, `currency_rate`) applies Akaunting's
+core `Currencies::convertToDefault`; `GET .../account-types` reads the type→class
+map from `double_entry_types`/`double_entry_classes` so the CLI doesn't hardcode
+it. These paths deliberately reuse DoubleEntry's models/casts and Akaunting's
+`Currencies` trait so the numbers mirror the installation exactly.
 
 ## What it does
 
@@ -24,13 +43,16 @@ GET   /api/akt-api/banks/unmapped     # banks with no Double-Entry ledger mappin
   (`PATCH .../ledgers/{id}`, repoint one item leg's GL account) and **split**
   (`POST .../ledgers/{id}/split`, fan one item leg out into N item legs so a bank
   transaction can post to several GL accounts, the way an invoice's line items do).
-- Reads the `double_entry_ledger` table via the query builder only — it does
-  **not** import or modify any DoubleEntry code, so it survives DoubleEntry
-  updates. (It couples only to that table's column names.) The one exception is
-  `GET .../banks/unmapped`, which also reads `double_entry_account_bank` (still
-  query-builder only, no DoubleEntry code) to find banks with no ledger mapping —
-  the root cause of a transaction that silently posts nothing; `akt verify`
-  surfaces these.
+- The ledger read/write and `banks/unmapped` paths touch DoubleEntry's tables
+  via the query builder only (coupling to column names, not code), so they survive
+  DoubleEntry updates. The **base-currency reporting** paths
+  (`balances` / `account-types` / `ledgers?convert=1`) deliberately go the other
+  way: they reuse DoubleEntry's own `Ledger` model + `DefaultCurrency` cast and
+  Akaunting's core `Currencies` trait, so their numbers **mirror Akaunting's own
+  statements exactly** rather than reimplementing conversion. `banks/unmapped`
+  reads `double_entry_account_bank` to find banks with no ledger mapping — the
+  root cause of a transaction that silently posts nothing; `akt verify` surfaces
+  these.
 - Inherits Akaunting's core `api` middleware for auth: **HTTP Basic** (the same
   admin email/password every other `/api/...` call uses) + `permission:read-api`
   + company scoping. No separate key or token.

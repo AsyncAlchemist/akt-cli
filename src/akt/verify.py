@@ -11,7 +11,8 @@ _CLASS_EXPECTS_TYPE = {3: "expense", 4: "income"}
 
 
 def find_report_dropped(transactions: list[dict], item_account_by_txn: dict[int, int],
-                        accounts_by_id: dict[int, dict]) -> list[dict]:
+                        accounts_by_id: dict[int, dict],
+                        type_class: "dict[int, int] | None" = None) -> list[dict]:
     """Flag standalone transactions Akaunting's COA P&L report silently DROPS.
 
     The DoubleEntry report has a type-guard: a posting is counted only when the
@@ -29,7 +30,7 @@ def find_report_dropped(transactions: list[dict], item_account_by_txn: dict[int,
         acct = accounts_by_id.get(item_account_by_txn.get(t["id"]))
         if not acct:
             continue
-        expects = _CLASS_EXPECTS_TYPE.get(account_class(acct.get("type_id")))
+        expects = _CLASS_EXPECTS_TYPE.get(account_class(acct.get("type_id"), type_class))
         if expects is None or ttype == expects:
             continue                                   # not a P&L account, or types agree
         findings.append({

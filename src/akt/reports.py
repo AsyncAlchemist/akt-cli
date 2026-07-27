@@ -9,15 +9,25 @@ import sys
 
 # DoubleEntry standard seeds (Database/Seeds/Types.php): type_id -> class_id.
 CLASS_NAMES = {1: "Assets", 2: "Liabilities", 3: "Expenses", 4: "Income", 5: "Equity"}
-TYPE_ID_CLASS = {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 10: 1,   # assets (incl. depreciation)
-                 7: 2, 8: 2, 9: 2, 17: 2,                      # liabilities (incl. tax)
-                 11: 3, 12: 3,                                 # expenses (incl. direct costs)
-                 13: 4, 14: 4, 15: 4,                          # income
-                 16: 5}                                        # equity
+
+# Fallback only. The authoritative type_id -> class_id map is pulled from the
+# installation via akt-api/account-types (see cli._fetch_type_class); this table
+# is used when that endpoint is unavailable (older akt-api) or omits a type.
+_FALLBACK_TYPE_CLASS = {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 10: 1,  # assets (incl. depreciation)
+                        7: 2, 8: 2, 9: 2, 17: 2,                     # liabilities (incl. tax)
+                        11: 3, 12: 3,                                # expenses (incl. direct costs)
+                        13: 4, 14: 4, 15: 4,                         # income
+                        16: 5}                                       # equity
 
 
-def account_class(type_id) -> "int | None":
-    c = TYPE_ID_CLASS.get(type_id)
+def account_class(type_id, type_class: "dict[int, int] | None" = None) -> "int | None":
+    """Map a DoubleEntry account type_id to its class_id, preferring the map pulled
+    from the installation (``type_class``) and falling back to the standard seeds."""
+    c = None
+    if type_class:
+        c = type_class.get(type_id)
+    if c is None:
+        c = _FALLBACK_TYPE_CLASS.get(type_id)
     if c is None:
         print(f"warning: unknown account type_id {type_id}; excluded from "
               f"class-grouped reports", file=sys.stderr)
@@ -50,11 +60,12 @@ def build_trial_balance(balances: dict[int, float], accounts_by_id: dict[int, di
             "balanced": abs(total_debit - total_credit) < 0.02}
 
 
-def build_profit_loss(balances: dict[int, float], accounts_by_id: dict[int, dict]) -> dict:
+def build_profit_loss(balances: dict[int, float], accounts_by_id: dict[int, dict],
+                      type_class: "dict[int, int] | None" = None) -> dict:
     income, expense = [], []
     for aid, bal in balances.items():
         a = accounts_by_id.get(aid, {})
-        cls = account_class(a.get("type_id"))
+        cls = account_class(a.get("type_id"), type_class)
         if cls == 4 and abs(bal) >= 0.005:
             income.append(_line(a, -bal))          # income is credit-positive
         elif cls == 3 and abs(bal) >= 0.005:
@@ -67,12 +78,13 @@ def build_profit_loss(balances: dict[int, float], accounts_by_id: dict[int, dict
             "total_expense": total_expense, "net_profit": round(total_income - total_expense, 2)}
 
 
-def build_balance_sheet(balances: dict[int, float], accounts_by_id: dict[int, dict]) -> dict:
+def build_balance_sheet(balances: dict[int, float], accounts_by_id: dict[int, dict],
+                        type_class: "dict[int, int] | None" = None) -> dict:
     assets, liabilities, equity = [], [], []
     net_income = 0.0
     for aid, bal in balances.items():
         a = accounts_by_id.get(aid, {})
-        cls = account_class(a.get("type_id"))
+        cls = account_class(a.get("type_id"), type_class)
         if cls == 1 and abs(bal) >= 0.005:
             assets.append(_line(a, bal))           # asset debit-positive
         elif cls == 2 and abs(bal) >= 0.005:

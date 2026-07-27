@@ -16,6 +16,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from . import fx
 from .client import Client
 from .coa import resolve_coding
 
@@ -201,6 +202,52 @@ def _normalize_date(value: str) -> str:
     return value
 
 
+def _date_opt(value: Any) -> "_dt.date | None":
+    """First 10 chars of a date/datetime string -> date, else None (=> latest rate)."""
+    if not value:
+        return None
+    try:
+        return _dt.date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def resolve_currency_rate(client: Client, ns: Any, *, currency_code: str | None,
+                          on_date: Any) -> float:
+    """The ``currency_rate`` to store on a foreign-currency transaction.
+
+    Explicit ``--currency-rate`` wins; a transaction in the company default
+    currency is always 1; otherwise the rate is fetched from the FX feed for the
+    transaction's own date (or ``--rate-date``). ``--no-auto-rate`` restores the
+    legacy "assume 1" behaviour. Mirrors the web UI, which copies the currency's
+    live rate into the record — but date-aware, so back-dated entries book at the
+    historical rate. Hard-fails (via fx.FxError) rather than silently booking at 1.
+    """
+    explicit = getattr(ns, "currency_rate", None)
+    if explicit:
+        return float(explicit)
+    default = client.setting("default.currency", "USD") or "USD"
+    if not currency_code or currency_code.upper() == default.upper():
+        return 1.0
+    if getattr(ns, "no_auto_rate", False):
+        return 1.0
+    rate_date = getattr(ns, "rate_date", None)
+    if rate_date:
+        try:
+            on = _dt.date.fromisoformat(str(rate_date)[:10])
+        except ValueError:
+            raise ValueError(f"invalid --rate-date {rate_date!r}; use YYYY-MM-DD")
+    else:
+        on = _date_opt(on_date)
+    rate = fx.resolve_rate(
+        default, currency_code, on,
+        ars_casa=getattr(ns, "ars_casa", None) or "bolsa",
+        ars_side=getattr(ns, "ars_side", None) or "mid",
+        cache_dir=str(fx.default_cache_dir()),
+    )
+    return float(rate)
+
+
 def body_from_fields(res: Resource, ns: Any, *, for_update: bool,
                      current: dict | None = None) -> dict:
     """Assemble a request body from declared fields + --set + --data.
@@ -307,7 +354,8 @@ def build_document_create(res: Resource, client: Client, ns: Any) -> dict:
         raise ValueError(f"--contact <id> is required to create a {res.noun}")
 
     contact = client.show("contacts", contact_id, type_scope=res.contact_scope())
-    currency = getattr(ns, "currency_code", None) or contact.get("currency_code") or "USD"
+    currency = (getattr(ns, "currency_code", None) or contact.get("currency_code")
+                or client.setting("default.currency", "USD"))
 
     items_specs = getattr(ns, "item", None) or []
     items = [parse_item(s) for s in items_specs]
@@ -334,7 +382,7 @@ def build_document_create(res: Resource, client: Client, ns: Any) -> dict:
         "issued_at": issued,
         "due_at": due,
         "currency_code": currency,
-        "currency_rate": getattr(ns, "currency_rate", None) or 1,
+        "currency_rate": resolve_currency_rate(client, ns, currency_code=currency, on_date=issued),
         "contact_id": int(contact_id),
         "contact_name": contact.get("name", ""),
         "contact_email": contact.get("email"),
@@ -576,18 +624,19 @@ def build_payment_create(res: Resource, client: Client, ns: Any) -> dict:
     currency = getattr(ns, "currency_code", None)
     if currency is None and document is not None:
         currency = document.get("currency_code")
-    currency = currency or "USD"
+    currency = currency or client.setting("default.currency", "USD")
 
     number = getattr(ns, "number", None) or _next_transaction_number(client)
+    paid = _normalize_date(getattr(ns, "paid_at", None) or now_dt())
 
     body: dict[str, Any] = {
         "type": ptype,
         "number": number,
         "account_id": int(account_id),
-        "paid_at": _normalize_date(getattr(ns, "paid_at", None) or now_dt()),
+        "paid_at": paid,
         "amount": amount,
         "currency_code": currency,
-        "currency_rate": getattr(ns, "currency_rate", None) or 1,
+        "currency_rate": resolve_currency_rate(client, ns, currency_code=currency, on_date=paid),
         "category_id": int(category_id),
         "payment_method": getattr(ns, "payment_method", None) or "offline-payments.cash.1",
     }
@@ -768,13 +817,15 @@ def build_journal_create(res: Resource, client: Client, ns: Any) -> dict:
     if not description:
         raise ValueError("--description is required to create a journal-entry")
 
+    paid = _normalize_date(getattr(ns, "paid_at", None) or today_dt())
+    currency = getattr(ns, "currency_code", None) or client.setting("default.currency", "USD")
     body: dict[str, Any] = {
-        "paid_at": _normalize_date(getattr(ns, "paid_at", None) or today_dt()),
+        "paid_at": paid,
         "journal_number": getattr(ns, "journal_number", None),
         "description": description,
         "basis": getattr(ns, "basis", None) or "accrual",
-        "currency_code": getattr(ns, "currency_code", None) or "USD",
-        "currency_rate": getattr(ns, "currency_rate", None) or 1,
+        "currency_code": currency,
+        "currency_rate": resolve_currency_rate(client, ns, currency_code=currency, on_date=paid),
         # Akaunting recomputes the entry amount from the ledger debits; send 0.
         "amount": 0,
         "items": items,

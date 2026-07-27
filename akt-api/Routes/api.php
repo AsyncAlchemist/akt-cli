@@ -22,8 +22,14 @@ Route::group([
         // the in-place fix for transactions the module defaulted to 628/200/etc.
         Route::patch('akt-api/ledgers/{id}', 'Ledgers@update')->name('akt-api.ledgers.update');
         // Per-account debit/credit totals over an optional date window — powers
-        // akt balance / trial-balance / report.
+        // akt balance / trial-balance / report. Base-currency (per-leg converted).
         Route::get('akt-api/balances', 'Balances@index')->name('akt-api.balances.index');
+        // Account type -> class map, read from the installation (kills the CLI's
+        // hardcoded type_id->class table).
+        Route::get('akt-api/account-types', 'Meta@accountTypes')->name('akt-api.account-types');
+        // Convert an amount at a rate to the company default currency, using
+        // Akaunting's own Currencies trait — mirrors convertToDefault for previews.
+        Route::get('akt-api/convert', 'Convert@index')->name('akt-api.convert');
         // Orphaned ledger rows (ledgerable soft-deleted/missing) — report + prune.
         Route::get('akt-api/ledgers/orphans', 'Ledgers@orphans')->name('akt-api.ledgers.orphans');
         Route::delete('akt-api/ledgers/orphans', 'Ledgers@pruneOrphans')->name('akt-api.ledgers.prune-orphans');

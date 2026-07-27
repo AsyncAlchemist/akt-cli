@@ -17,7 +17,7 @@ class Ledger extends JsonResource
      */
     public function toArray($request)
     {
-        return [
+        $out = [
             'id'              => $this->id,
             'company_id'      => $this->company_id,
             'account_id'      => $this->account_id,
@@ -28,5 +28,14 @@ class Ledger extends JsonResource
             'credit'          => $this->credit,
             'issued_at'       => $this->issued_at,
         ];
+
+        // Present only on the ?convert=1 path (see Ledgers::attachConverted).
+        if (isset($this->currency_code)) {
+            $out['currency_code']    = $this->currency_code;
+            $out['debit_converted']  = $this->debit_converted;
+            $out['credit_converted'] = $this->credit_converted;
+        }
+
+        return $out;
     }
 }
