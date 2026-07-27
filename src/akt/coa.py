@@ -231,7 +231,7 @@ def apply_plan(client, plan: "CoaPlan", *, prune: bool) -> dict:
     (chart-of-accounts is read-only on /api); categories use /api."""
     summary = {"accounts_created": 0, "accounts_renamed": 0,
                "categories_created": 0, "categories_renamed": 0,
-               "accounts_disabled": 0}
+               "accounts_disabled": 0, "accounts_skipped": 0}
 
     for acct in plan.accounts_create:
         client.web_json("POST", "double-entry/chart-of-accounts", _account_form(acct))
@@ -261,9 +261,23 @@ def apply_plan(client, plan: "CoaPlan", *, prune: bool) -> dict:
         summary["categories_renamed"] += 1
 
     if prune:
+        from .client import ApiError   # local import: avoids client<->coa import cycle
         for live in plan.accounts_disable:
-            client.web_json("GET", f"double-entry/chart-of-accounts/{live['id']}/disable")
-            summary["accounts_disabled"] += 1
+            try:
+                client.web_json("GET", f"double-entry/chart-of-accounts/{live['id']}/disable")
+                summary["accounts_disabled"] += 1
+            except ApiError as e:
+                # Akaunting refuses to disable accounts wired into company settings
+                # (the default A/R, A/P, Sales and discount accounts). Those are
+                # system defaults that must stay enabled — skip them with a warning
+                # rather than aborting the whole prune on the first one.
+                msg = str(e)
+                if "not allowed to disable" in msg or "settings related" in msg:
+                    summary["accounts_skipped"] += 1
+                    print(f"  skip disable {live.get('code')} {live.get('name')!r}: "
+                          f"protected by company settings", file=sys.stderr)
+                else:
+                    raise
 
     return summary
 

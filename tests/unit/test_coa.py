@@ -416,6 +416,34 @@ def test_apply_prune_disables_via_toggle_routes():
     assert summary["accounts_disabled"] == 1
 
 
+def test_apply_prune_skips_settings_protected_accounts():
+    """Akaunting rejects disabling accounts wired into company settings (default
+    A/R, A/P, Sales, discounts) with an HTTP 400. Prune must skip those and keep
+    going, not abort on the first one."""
+    from akt.client import ApiError
+
+    # 120 (protected) comes before 999 (disable-able) in live order.
+    live_accounts = [
+        {"id": 7, "code": 120, "name": "Accounts Receivable", "type_id": 1, "enabled": 1},
+        {"id": 9, "code": 999, "name": "Legacy", "type_id": 12, "enabled": 1},
+    ]
+    plan = plan_sync(_cfg(), live_accounts, [], prune=True)
+
+    class ProtectingClient(RecordingClient):
+        def web_json(self, method, path, form=None):
+            if path == "double-entry/chart-of-accounts/7/disable":
+                raise ApiError(400, "Warning: You are not allowed to disable "
+                                    "<b>Accounts Receivable</b> because it has settings related.")
+            return super().web_json(method, path, form)
+
+    client = ProtectingClient()
+    summary = apply_plan(client, plan, prune=True)   # must NOT raise
+
+    assert summary["accounts_disabled"] == 1          # 999 Legacy disabled
+    assert summary["accounts_skipped"] == 1           # 120 A/R skipped, not fatal
+    assert ("web_json", "GET", "double-entry/chart-of-accounts/9/disable", {}) in client.calls
+
+
 from types import SimpleNamespace
 from akt.coa import resolve_coding
 from akt.registry import PAYMENT
