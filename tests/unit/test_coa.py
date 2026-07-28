@@ -463,6 +463,9 @@ class CoaFakeClient:
             return self._categories
         return []
 
+    def list_ref(self, path, **kw):
+        return self.list(path, **kw)
+
     def setting(self, key, default=None):
         return self._settings.get(key, default)
 

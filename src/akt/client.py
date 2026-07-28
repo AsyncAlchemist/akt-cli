@@ -61,15 +61,18 @@ def _is_transient(resp: requests.Response) -> bool:
 
 class Client:
     def __init__(self, config: Config, *, timeout: float = 30.0, max_retries: int = 4,
-                 throttle: float = 0.0):
+                 throttle: float = 0.0, debug: bool = False):
         self.config = config
         self.timeout = timeout
         self.max_retries = max_retries
         self.throttle = throttle  # min seconds between requests (anti-WAF)
+        self.debug = debug  # log each request attempt (status/timing/retries) to stderr
         self._last_request = 0.0
         self._settings_cache: dict[str, Any] = {}
         self._settings_loaded = False
         self._capabilities: dict[str, bool] = {}  # optional-module probes (e.g. akt-api)
+        self._ref_cache: dict[str, list] = {}  # in-process cache for static reference lists
+        self._txn_number_max: int | None = None  # seeded once, incremented per create in a batch
         self._web_authed = False  # whether a web (session-cookie) login has run
         self._session = requests.Session()
         self._session.auth = (config.email, config.password)
@@ -80,6 +83,11 @@ class Client:
                 "User-Agent": "akt/0.3 (+akaunting-cli)",
             }
         )
+        # Secret shared with the AktApi server module: requests bearing it skip
+        # the API rate limit (60/min throttle:api) — akt is a trusted admin CLI
+        # doing bulk entry, not the browser UI the limit is meant for.
+        if getattr(config, "bypass_token", None):
+            self._session.headers["X-Akt-Bypass"] = config.bypass_token
 
     # ---- low level -----------------------------------------------------
 
@@ -132,12 +140,17 @@ class Client:
             data = json.dumps(json_body)
 
         attempt = 0
+        started = time.monotonic()
+        body_len = len(data) if isinstance(data, (str, bytes)) else None
         while True:
             if self.throttle > 0:
                 wait = self.throttle - (time.monotonic() - self._last_request)
                 if wait > 0:
+                    if self.debug and wait > 0.01:
+                        self._dbg(f"throttle sleep {wait:.2f}s")
                     time.sleep(wait)
             self._last_request = time.monotonic()
+            t0 = time.monotonic()
             resp = self._session.request(
                 method.upper(),
                 url,
@@ -147,12 +160,78 @@ class Client:
                 headers=headers,
                 timeout=self.timeout,
             )
-            if attempt < self.max_retries and _is_transient(resp):
+            dur = time.monotonic() - t0
+            transient = _is_transient(resp)
+            will_retry = attempt < self.max_retries and transient
+            if self.debug:
+                extra = ""
+                if transient or not resp.ok:
+                    snippet = " ".join((resp.text or "").split())[:140]
+                    extra = f" body={snippet!r}"
+                note = ""
+                if will_retry:
+                    delay = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
+                    note = f" -> retry {attempt + 1}/{self.max_retries} after {delay:.1f}s backoff"
+                size = f" reqbytes={body_len}" if body_len is not None else ""
+                self._dbg(
+                    f"{method.upper()} {path} attempt={attempt} status={resp.status_code} "
+                    f"{dur * 1000:.0f}ms transient={transient}{size}{note}{extra}"
+                )
+                # On any retry/failure dump the full exchange so the WAF/rate-limit
+                # response (Retry-After, rule id, markers) is visible. Creds redacted.
+                if transient or not resp.ok:
+                    self._dbg_exchange(resp)
+            if will_retry:
                 delay = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
                 time.sleep(delay)
                 attempt += 1
                 continue
+            if self.debug and attempt:
+                self._dbg(
+                    f"{method.upper()} {path} settled status={resp.status_code} after "
+                    f"{attempt} retr{'y' if attempt == 1 else 'ies'}, total {time.monotonic() - started:.1f}s"
+                )
             return self._handle(resp)
+
+    def _dbg(self, msg: str) -> None:
+        """Write a debug line to stderr (enabled by --debug / AKT_DEBUG)."""
+        import sys
+        sys.stderr.write(f"[akt-debug] {msg}\n")
+        sys.stderr.flush()
+
+    _REDACT_HEADERS = {"authorization", "cookie", "set-cookie", "proxy-authorization"}
+
+    def _dbg_exchange(self, resp: requests.Response) -> None:
+        """Dump the full request + response (headers/body) for a retried/failed
+        call so the WAF / rate-limit response is fully visible. Credential-bearing
+        headers are redacted."""
+        def _fmt(items) -> str:
+            out = []
+            for k, v in items:
+                if k.lower() in self._REDACT_HEADERS:
+                    v = "<redacted>"
+                out.append(f"      {k}: {v}")
+            return "\n".join(out) if out else "      (none)"
+
+        req = resp.request
+        body = req.body
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "replace")
+        lines = [
+            "full exchange:",
+            f"    -> {req.method} {req.url}",
+            "    request headers:",
+            _fmt(req.headers.items()),
+        ]
+        if body:
+            lines.append(f"    request body: {str(body)[:2000]}")
+        lines += [
+            f"    <- HTTP {resp.status_code} {resp.reason} (elapsed {resp.elapsed.total_seconds():.2f}s)",
+            "    response headers:",
+            _fmt(resp.headers.items()),
+            f"    response body: {' '.join((resp.text or '').split())[:1200]}",
+        ]
+        self._dbg("\n".join(lines))
 
     @staticmethod
     def _waf_blocked(resp: requests.Response) -> bool:
@@ -397,6 +476,15 @@ class Client:
                 break
             page += 1
         return out
+
+    def list_ref(self, path: str, *, type_scope: str | None = None) -> list[dict]:
+        """Cached ``list(all_pages=True)`` for STATIC reference data
+        (chart-of-accounts, categories, …). Cached for this client's lifetime,
+        so a batch of creates fetches each reference table once instead of
+        re-pulling it per row. Not for mutable data (transactions, documents)."""
+        if path not in self._ref_cache:
+            self._ref_cache[path] = self.list(path, type_scope=type_scope, all_pages=True)
+        return self._ref_cache[path]
 
     def iter_pages(self, path: str, *, type_scope: str | None = None, search: str | None = None,
                    params: dict | None = None) -> Iterator[dict]:

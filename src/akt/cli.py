@@ -101,6 +101,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--coa", dest="coa_file", default=None, metavar="FILE",
                         help="COA config for category<->account linking "
                              "(or AKT_COA_FILE / ./coa.toml / ~/.config/akt/coa.toml)")
+    parser.add_argument("--debug", dest="conn_debug", action="store_true", default=False,
+                        help="Log each API request attempt (status, timing, retries, WAF "
+                             "body) to stderr. Also enabled by AKT_DEBUG=1.")
 
     sub = parser.add_subparsers(dest="resource", metavar="<resource>")
 
@@ -609,7 +612,9 @@ def main(argv: list[str] | None = None) -> int:
     throttle = getattr(ns, "conn_throttle", None)
     if throttle is None:
         throttle = float(os.environ.get("AKT_THROTTLE", "0") or 0)
-    client = Client(config, throttle=throttle)
+    debug = getattr(ns, "conn_debug", False) or \
+        os.environ.get("AKT_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+    client = Client(config, throttle=throttle, debug=debug)
 
     try:
         ns._coa = load_coa(getattr(ns, "coa_file", None))

@@ -730,13 +730,17 @@ def build_transfer_create(res: Resource, client: Client, ns: Any) -> dict:
 
 def _next_transaction_number(client: Client) -> str:
     pre = client.setting("transaction.number_prefix") or "PAY-"
-    existing = client.list("transactions", all_pages=True)
-    maxn = 0
-    for row in existing:
-        tail = "".join(ch for ch in str(row.get("number", "")) if ch.isdigit())
-        if tail:
-            maxn = max(maxn, int(tail))
-    return f"{pre}{maxn + 1:05d}"
+    # Seed the running max ONCE per client (scanning the ledger is O(N) — doing it
+    # per create is O(N^2) over a batch). Subsequent creates increment in-process.
+    if getattr(client, "_txn_number_max", None) is None:
+        maxn = 0
+        for row in client.list("transactions", all_pages=True, limit=100):
+            tail = "".join(ch for ch in str(row.get("number", "")) if ch.isdigit())
+            if tail:
+                maxn = max(maxn, int(tail))
+        client._txn_number_max = maxn
+    client._txn_number_max += 1
+    return f"{pre}{client._txn_number_max:05d}"
 
 
 # --------------------------------------------------------------------------

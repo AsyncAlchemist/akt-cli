@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.31",
+    "PySocks>=1.7.1",  # enables SOCKS proxy support (HTTPS_PROXY=socks5h://…)
 ]
 
 [project.urls]

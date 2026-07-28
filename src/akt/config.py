@@ -52,6 +52,7 @@ class Config:
     email: str
     password: str
     company_id: int
+    bypass_token: str | None = None  # sent as X-Akt-Bypass to skip the server API rate limit
 
     @property
     def api_root(self) -> str:
@@ -99,6 +100,7 @@ def load_config(
     resolved_email = pick(email, "AKT_EMAIL", "AKAUNTING_ADMIN_EMAIL")
     resolved_password = pick(password, "AKT_PASSWORD", "AKAUNTING_ADMIN_PASSWORD")
     resolved_company = pick(company, "AKT_COMPANY", default="1")
+    resolved_bypass = pick(None, "AKT_API_BYPASS_TOKEN")
 
     missing = [
         name
@@ -128,4 +130,5 @@ def load_config(
         email=resolved_email,
         password=resolved_password,
         company_id=company_id,
+        bypass_token=resolved_bypass,
     )

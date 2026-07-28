@@ -1,12 +1,14 @@
 {
     "alias": "akt-api",
     "icon": "fa fa-book",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "active": 1,
     "providers": [
         "Modules\\AktApi\\Providers\\Main"
     ],
-    "requires": ["double-entry"],
+    "requires": [
+        "double-entry"
+    ],
     "aliases": {},
     "files": [],
     "reports": [],

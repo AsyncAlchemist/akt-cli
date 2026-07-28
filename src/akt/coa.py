@@ -311,12 +311,12 @@ def resolve_coding(config: CoaConfig, client, *, account_ref: str | None = None,
             f"category, so it can't be coded onto a payment via --account "
             f"(only mirrored income/expense accounts can be)")
 
-    live_accounts = client.list("chart-of-accounts", all_pages=True)
+    live_accounts = client.list_ref("chart-of-accounts")
     de_id = next((a["id"] for a in live_accounts if int(a.get("code", -1)) == acct.code), None)
     if de_id is None:
         raise ValueError(f"account {acct.code} ({acct.name}) is not in Akaunting yet — "
                          f"run `akt coa sync` first")
-    live_categories = client.list("categories", all_pages=True)
+    live_categories = client.list_ref("categories")
     cat_id = next((c["id"] for c in live_categories
                    if c.get("name") == acct.category and c.get("type") == acct.category_type),
                   None)
