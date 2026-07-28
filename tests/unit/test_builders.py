@@ -73,6 +73,8 @@ class FakeClient:
             return self._txns_list
         if path == "journal-entry":
             return self._journals_list
+        if path == "chart-of-accounts":                 # code == id, for --item resolution
+            return [{"code": i, "id": i, "name": f"a{i}"} for i in range(1, 100)]
         return []
 
 
@@ -397,22 +399,22 @@ def test_journal_foreign_currency_autofills_rate(monkeypatch):
 def _journal_ns(**over):
     base = dict(journal_number=None, paid_at=None, description="Opening balances",
                 basis=None, reference=None, currency_code=None, currency_rate=None,
-                item=["account_id=10,debit=100", "account_id=20,credit=100"],
+                item=["account=10,debit=100", "account=20,credit=100"],
                 set_=None, data=None)
     base.update(over)
     return SimpleNamespace(**base)
 
 
 def test_parse_journal_item_debit_and_credit_lines():
-    assert parse_journal_item("account_id=10,debit=100") == {"account_id": 10, "debit": 100}
-    assert parse_journal_item("account_id=20,credit=50.5") == {"account_id": 20, "credit": 50.5}
+    assert parse_journal_item("account=10,debit=100") == {"account": 10, "debit": 100}
+    assert parse_journal_item("account=20,credit=50.5") == {"account": 20, "credit": 50.5}
 
 
 def test_parse_journal_item_requires_account_and_side():
     with pytest.raises(ValueError):
-        parse_journal_item("debit=100")               # no account_id
+        parse_journal_item("debit=100")               # no account
     with pytest.raises(ValueError):
-        parse_journal_item("account_id=10")           # neither debit nor credit
+        parse_journal_item("account=10")              # neither debit nor credit
 
 
 def test_build_journal_create_balances_and_autonumbers():
@@ -440,14 +442,14 @@ def test_build_journal_create_defaults_basis_accrual():
 
 def test_build_journal_create_rejects_imbalance():
     client = FakeClient(journals_list=[])
-    ns = _journal_ns(item=["account_id=10,debit=100", "account_id=20,credit=90"])
+    ns = _journal_ns(item=["account=10,debit=100", "account=20,credit=90"])
     with pytest.raises(ValueError, match="does not balance"):
         build_journal_create(JOURNAL_ENTRY, client, ns)
 
 
 def test_build_journal_create_requires_two_lines():
     client = FakeClient(journals_list=[])
-    ns = _journal_ns(item=["account_id=10,debit=100"])
+    ns = _journal_ns(item=["account=10,debit=100"])
     with pytest.raises(ValueError, match="at least 2"):
         build_journal_create(JOURNAL_ENTRY, client, ns)
 

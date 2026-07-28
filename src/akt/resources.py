@@ -748,10 +748,11 @@ def _next_transaction_number(client: Client) -> str:
 # --------------------------------------------------------------------------
 
 def parse_journal_item(spec: str) -> dict:
-    """Parse one journal line: ``account_id=10,debit=100`` or
-    ``account_id=20,credit=100`` (optional ``id=`` on update to target an
+    """Parse one journal line: ``account=<code|name>,debit=100`` or
+    ``account=<code|name>,credit=100`` (optional ``id=`` on update to target an
     existing ledger, optional ``notes=``). A line carries a debit *or* a
-    credit; the omitted side defaults to 0."""
+    credit; the omitted side defaults to 0. The account ref is resolved to its
+    live id when the entry is built — consistent with payment ``--split``."""
     item: dict[str, Any] = {}
     for part in spec.split(","):
         if not part.strip():
@@ -760,11 +761,24 @@ def parse_journal_item(spec: str) -> dict:
             raise ValueError(f"--item field must be key=value, got {part!r}")
         k, _, v = part.partition("=")
         item[k.strip()] = _coerce(v.strip())
-    if "account_id" not in item:
-        raise ValueError(f"--item requires an account_id=… field: {spec!r}")
+    if "account" not in item:
+        raise ValueError(f"--item requires an account=<code|name> field: {spec!r}")
     if "debit" not in item and "credit" not in item:
         raise ValueError(f"--item requires a debit=… or credit=… field: {spec!r}")
     return item
+
+
+def _resolve_journal_item_accounts(items: list[dict], client: Client) -> None:
+    """Resolve each parsed line's ``account`` (code or name) to its live
+    ``account_id``. Lines already carrying ``account_id`` (rebuilt from an
+    existing entry, or supplied via --data) are left untouched."""
+    from .ledger import resolve_account_id
+    pending = [it for it in items if "account" in it]
+    if not pending:
+        return
+    live = client.list("chart-of-accounts", all_pages=True)
+    for it in pending:
+        it["account_id"] = resolve_account_id(live, it.pop("account"))
 
 
 def _normalize_journal_items(items: list[dict]) -> list[dict]:
@@ -813,7 +827,7 @@ def build_journal_create(res: Resource, client: Client, ns: Any) -> dict:
     items = [parse_journal_item(s) for s in (getattr(ns, "item", None) or [])]
     if not items and "items" not in extra:
         raise ValueError(
-            "at least two --item 'account_id=…,debit=…|credit=…' lines are "
+            "at least two --item 'account=…,debit=…|credit=…' lines are "
             "required (or supply --data with items)"
         )
 
@@ -840,7 +854,8 @@ def build_journal_create(res: Resource, client: Client, ns: Any) -> dict:
     body.update(extra)
     if isinstance(body.get("items"), list):
         _normalize_journal_items(body["items"])
-        _require_balanced(body["items"])
+        _require_balanced(body["items"])                    # cheap client-side guard, no network
+        _resolve_journal_item_accounts(body["items"], client)  # resolve account codes -> ids
     # Assign the journal number last — after client-side validation — so an
     # invalid entry never burns a lookup (and the imbalance error surfaces
     # without a network round-trip).
@@ -901,7 +916,8 @@ def build_journal_update(res: Resource, client: Client, ns: Any, current: dict) 
     body.update(load_data_arg(getattr(ns, "data", None)))
     if isinstance(body.get("items"), list):
         _normalize_journal_items(body["items"])
-        _require_balanced(body["items"])
+        _require_balanced(body["items"])                    # cheap client-side guard, no network
+        _resolve_journal_item_accounts(body["items"], client)  # resolve account codes -> ids
     return body
 
 

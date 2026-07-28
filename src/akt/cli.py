@@ -48,7 +48,8 @@ def _add_field_args(p: argparse.ArgumentParser, res: Resource, *, for_update: bo
     elif res.endpoint == "journal-entry":
         p.add_argument("--item", action="append", metavar="K=V,...",
                        help="ledger line (>= 2, must balance), e.g. "
-                            "'account_id=10,debit=100' or 'account_id=20,credit=100' (repeatable)")
+                            "'account=110,debit=100' or 'account=400,credit=100' (repeatable; "
+                            "account is a GL code or name)")
     elif res.endpoint == "transactions" and not for_update:
         p.add_argument("--split", action="append", metavar="account=CODE,debit|credit=X",
                        help="split the GL posting across multiple accounts (repeatable): "

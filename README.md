@@ -199,12 +199,12 @@ akt account delete 12
 # Post a balanced journal entry (>= 2 lines; debits must equal credits;
 # journal number auto-generated, basis defaults to accrual)
 akt journal-entry create --description "Owner capital contribution" \
-    --item 'account_id=10,debit=5000' \
-    --item 'account_id=30,credit=5000'
+    --item 'account=105,debit=5000' \
+    --item 'account=300,credit=5000'
 akt journal-entry list
 akt journal-entry update 4 --description "Corrected memo"
 akt journal-entry create --description "Vendor bill accrual" --basis accrual \
-    --item 'account_id=60,debit=250' --item 'account_id=21,credit=250' \
+    --item 'account=510,debit=250' --item 'account=200,credit=250' \
     --attachment ./invoice.pdf
 
 ## COA config: link categories and accounts (Xero-style)

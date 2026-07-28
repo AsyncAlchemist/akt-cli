@@ -373,13 +373,13 @@ def test_journal_entry_lifecycle(akt, tracker):
         pytest.skip("DoubleEntry module not installed (journal-entry unavailable)")
     if len(accounts) < 2:
         pytest.skip("need at least two GL accounts to post a balanced entry")
-    debit_acct, credit_acct = accounts[0]["id"], accounts[1]["id"]
+    debit_acct, credit_acct = accounts[0]["code"], accounts[1]["code"]
 
     entry = akt(
         "journal-entry", "create",
         "--description", f"AKT-IT journal {RID}",
-        "--item", f"account_id={debit_acct},debit=100",
-        "--item", f"account_id={credit_acct},credit=100",
+        "--item", f"account={debit_acct},debit=100",
+        "--item", f"account={credit_acct},credit=100",
     )
     tracker("journal-entry", entry["id"])
     assert _amount(entry) == 100, "entry amount is the summed debits"
@@ -404,8 +404,8 @@ def test_journal_entry_lifecycle(akt, tracker):
 def test_journal_entry_rejects_imbalance(akt):
     """Client-side balance guard: an unbalanced entry never reaches the API."""
     proc = akt("--json", "journal-entry", "create",
-               "--description", "AKT-IT bad", "--item", "account_id=1,debit=100",
-               "--item", "account_id=2,credit=90", raw=True)
+               "--description", "AKT-IT bad", "--item", "account=1,debit=100",
+               "--item", "account=2,credit=90", raw=True)
     assert proc.returncode != 0
     assert "balance" in proc.stderr.lower()
 
