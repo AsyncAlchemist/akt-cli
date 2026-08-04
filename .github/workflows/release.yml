@@ -41,7 +41,7 @@ jobs:
       # Pace requests to stay under Akaunting's ~60/min API throttle.
       AKT_THROTTLE: "1.0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
