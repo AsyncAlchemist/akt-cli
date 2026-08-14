@@ -74,6 +74,58 @@ class Ledgers extends ApiController
     }
 
     /**
+     * Hard-delete the ledger legs belonging to ONE still-live record.
+     *
+     * This is the "legs before the parent" primitive. Deleting a record through
+     * Akaunting's API does NOT remove its double-entry legs: the DoubleEntry
+     * Transaction observer has a working deleted() hook, but it does not fire on
+     * the API path, so the legs survive as live rows pointing at a record that is
+     * gone. Measured 2026-08-13: deleting 17 payments + 2 journal entries left 40
+     * orphans.
+     *
+     * Those orphans are NOT inert, contrary to the note on pruneOrphans().
+     * Ledger::scopeAccrual() uses whereHasMorph(), which requires the parent to
+     * exist, so accrual balances are safe. But scopeCash() opens with a bare
+     * where('ledgerable_type', Transaction::class) — no existence check — so on
+     * CASH basis every orphaned Transaction leg is still summed into the balance.
+     *
+     * Calling this BEFORE deleting the record means no orphan is ever created, so
+     * there is no window in which a cash-basis report can read corrupt totals.
+     *
+     * DELETE /api/akt-api/ledgers?ledgerable_type=...&ledgerable_id=...
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function destroyFor(Request $request)
+    {
+        $request->validate([
+            'ledgerable_type' => 'required|string',
+            'ledgerable_id' => 'required|integer',
+        ]);
+
+        $type = $request->input('ledgerable_type');
+        $id = (int) $request->input('ledgerable_id');
+
+        $ids = DB::table('double_entry_ledger')
+            ->where('company_id', company_id())
+            ->where('ledgerable_type', $type)
+            ->where('ledgerable_id', $id)
+            ->pluck('id')
+            ->all();
+
+        $deleted = 0;
+        foreach (array_chunk($ids, 500) as $batch) {
+            $deleted += DB::table('double_entry_ledger')->whereIn('id', $batch)->delete();
+        }
+
+        return response()->json(['data' => [
+            'ledgerable_type' => $type,
+            'ledgerable_id' => $id,
+            'deleted' => $deleted,
+        ]]);
+    }
+
+    /**
      * Display a listing of general-ledger postings.
      *
      * Reads DoubleEntry's ledger table directly (no DoubleEntry class imported).
