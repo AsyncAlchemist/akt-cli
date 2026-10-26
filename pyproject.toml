@@ -19,7 +19,10 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Accounting",
 ]
 dependencies = [
-    "requests>=2.31",
+    "requests>=2.33.0",
+    # Security floors apply to pip installs as well as the uv lockfile.
+    "certifi>=2026.10.19",
+    "urllib3>=2.8.0",
     "PySocks>=1.7.1",  # enables SOCKS proxy support (HTTPS_PROXY=socks5h://…)
 ]
 
